@@ -1,0 +1,39 @@
+for i in range (a,b)#中的a，b是左闭右开，所以要包括的话要b+1
+
+def function (a,b=1)
+d=function（3）#a=3,b=1，默认b为1
+d=function (3,4) #a=3,b=4
+
+def function(a=2,b=7)
+d=function(b=5)#a=2,b=5,only change the num you change in function( ), the else keep the original set
+d=function(a,b=7) yes
+d=function(a=7,b) no
+
+#局部函数中的变量优先级大于global环境的变量，局部函数可以读global中定义的变量，但是不可以修改
+
+for i in range (1,10) #指的是把i从1到9一个个试过去
+if num in range(1,10)#指的是如果num=1，2，，，9
+
+L[:]=[a,b,c]直接修改原表格，放在函数里面可以修改全局变量。代表L中的所有元素,实时同步，a和L一样
+a=deepcopy.L代表为L创建一个副本，不同步
+这样
+import copy
+L=[1,2,3]
+K=copy.deepcopy(L)
+L.append(1)
+print(K)
+print(L)
+
+del（L【位置】）
+
+w=lambda x,y:x**y
+w=lambda x:x*2
+
+w=lambda :random.randint(1,100)
+
+10.29
+表格处理：
+len(), min(), max(), del(L[i]),L.append(), L.extend(), L.count(), L.index(), L.insert(), L.pop(), L.remove(), L.reverse(), L.sort()
+
+10.31
+f"{num:.2f}"#保留两位小数

@@ -1,0 +1,66 @@
+m,n=input().split()
+m=int(m)
+n=int(n)
+#print(m,n)
+l=[]
+Times=0
+score=0
+
+for i in range(m):
+    l1=input().split()
+    l.append(l1)
+print('\n'.join([' '.join(row)for row in l]))
+print(0)
+while True:
+    l2=input().split()
+    if l2[0]!="swap":
+        break
+    Times+=1
+    x1=int(l2[1])-1
+    y1=int(l2[2])-1
+    x2=int(l2[3])-1
+    y2=int(l2[4])-1
+
+    is_adjacent = (abs(x1-x2) == 1 and y1 == y2) or (abs(y1-y2) == 1 and x1 == x2)
+    in_bound = 0 <= x1 < m and 0 <= y1 < n and 0 <= x2 < m and 0 <= y2 < n
+    
+    if not (is_adjacent and in_bound):
+        print('\n'.join([' '.join(row)for row in l]))
+        print(score)
+        continue
+
+    l[x1][y1],l[x2][y2]=l[x2][y2],l[x1][y1]
+    if l[x1][y1]==l[x1][y1+1] and l[x1][y1]==l[x1][y1-1] and 0 < y1 < n-1:
+        l[x1][y1]="."
+        l[x1][y1+1]='.'
+        l[x1][y1-1]='.'
+        score+=30
+    elif l[x1][y1]==l[x1-1][y1] and l[x1][y1]==l[x1+1][y1] and 0< x1< m-1:
+        l[x1][y1]='.'
+        l[x1-1][y1]='.'
+        l[x1+1][y1]='.'
+        score+=30
+    elif l[x2][y2]==l[x2][y2+1] and l[x2][y2]==l[x2][y2-1] and 0 < y2 < n-1:
+        l[x2][y2]="."
+        l[x2][y2+1]='.'
+        l[x2][y2-1]='.'
+        score+=30
+    elif l[x2][y2]==l[x2-1][y2] and l[x2][y2]==l[x2+1][y2] and 0 < x2 < m-1:
+        l[x2][y2]='.'
+        l[x2-1][y2]='.'
+        l[x2+1][y2]='.'
+        score+=30
+    else :
+        l[x1][y1],l[x2][y2]=l[x2][y2],l[x1][y1]
+
+    print('\n'.join([' '.join(row)for row in l]))
+    print(score)
+
+    
+    #print(x1,y1,x2,y2)
+
+
+
+
+
+

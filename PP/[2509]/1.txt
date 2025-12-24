@@ -1,0 +1,23 @@
+n=int(input())
+l=input().split()
+a,b=input().split()
+min,max=input().split()
+lf=[]
+
+for x in l :
+    y=float(a)*int(x)+float(b)
+    if y-int(y)<0.5:
+        y=int(y)
+    elif y-int(y)>=0.5:
+        y=int(y)+1
+    if int(min)<=y<=int(max):
+        lf.append(y)
+    elif int(min)>y:
+        lf.append(int(min))
+    else:
+        lf.append(int(max))
+
+o=''
+for x in lf:   
+    o+=str(x)+' '
+print(o.strip())
