@@ -14,7 +14,7 @@ xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes thi
 #################################
 ## USER CODE: Set simulation parameters here
 #################################
-simend = 60 #simulation time (second)
+simend = 180 #simulation time (second)
 print_camera_config = 0 #set to 1 to print camera config
                         #this is useful for initializing view of the model)
 #################################
@@ -261,7 +261,7 @@ BOUNDARY_POINTS.append(SQUARE_CORNERS[0].copy())
 ## 调参区（主要就调这里）
 ############################################
 # PID 增益（6 维=6个关节）。KP大更快，KD大更稳，KI一般先不用。
-PID_KP = np.ones(6) * 50.0
+PID_KP = np.ones(6) * 1.0
 PID_KI = np.zeros(6) * 0.0
 PID_KD = np.zeros(6) * 0.1*PID_KP
 
@@ -272,7 +272,7 @@ PID_INTEGRAL_LIMIT = 0.5
 TERMINAL_Q = np.array([0.0, -2.32, -1.38, -2.45, 1.57, 0.0], dtype=float)
 
 # 终止阶段预留时间：初始姿态改得越远，这里越要大（建议 20~60 秒）
-TERMINAL_SWITCH_BEFORE_END_SEC = 5
+TERMINAL_SWITCH_BEFORE_END_SEC = 30.0
 ############################################
 
 
@@ -372,7 +372,7 @@ while not glfw.window_should_close(window):
         X_ref = data.site_xpos[0].copy()
 
         # 任务2：切到终止姿态阶段（画完后，或到结束前 N 秒）
-        if g_write_finished:
+        if g_write_finished or (data.time >= simend - TERMINAL_SWITCH_BEFORE_END_SEC):
             if g_mode != 'terminal':
                 g_mode = 'terminal'
                 PID_STATE['integral'][:] = 0.0
@@ -384,7 +384,7 @@ while not glfw.window_should_close(window):
         ######################################
 
         # Compute control input using IK
-        cur_ctrl = IK_controller(model, data, x_ref, cur_q_pos)
+        cur_ctrl = IK_controller(model, data, X_ref, cur_q_pos)
         
         # Apply control input
         data.ctrl[:] = cur_ctrl
