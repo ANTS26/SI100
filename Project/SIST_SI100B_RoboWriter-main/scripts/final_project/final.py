@@ -187,6 +187,76 @@ LINE_RGBA = np.array([1.0, 0.0, 0.0, 1.0])
 
 IK_controller_base = IK_controller
 
+# 插值函数（写笔画/轨迹会用到）
+def LinearInterpolate(q0, q1, t, t_total):
+    """线性插值：t=0 返回 q0，t=t_total 返回 q1。"""
+    q0 = np.asarray(q0, dtype=float)
+    q1 = np.asarray(q1, dtype=float)
+    if t_total <= 0:
+        return q1.copy()
+    s = float(t) / float(t_total)
+    s = float(np.clip(s, 0.0, 1.0))
+    return (1.0 - s) * q0 + s * q1
+
+
+def QuadBezierInterpolate(q0, q1, q2, t, t_total):
+    """二次 Bezier 插值：q0(起点), q1(控制点), q2(终点)。"""
+    q0 = np.asarray(q0, dtype=float)
+    q1 = np.asarray(q1, dtype=float)
+    q2 = np.asarray(q2, dtype=float)
+    if t_total <= 0:
+        return q2.copy()
+    s = float(t) / float(t_total)
+    s = float(np.clip(s, 0.0, 1.0))
+    one_minus = 1.0 - s
+    return (one_minus * one_minus) * q0 + (2.0 * one_minus * s) * q1 + (s * s) * q2
+
+
+def CubicBezierInterpolate(q0, q1, q2, q3, t, t_total):
+    """三次 Bezier 插值：q0(起点), q1/q2(控制点), q3(终点)。"""
+    q0 = np.asarray(q0, dtype=float)
+    q1 = np.asarray(q1, dtype=float)
+    q2 = np.asarray(q2, dtype=float)
+    q3 = np.asarray(q3, dtype=float)
+    if t_total <= 0:
+        return q3.copy()
+    s = float(t) / float(t_total)
+    s = float(np.clip(s, 0.0, 1.0))
+    one_minus = 1.0 - s
+    return (
+        (one_minus ** 3) * q0
+        + (3.0 * (one_minus ** 2) * s) * q1
+        + (3.0 * one_minus * (s ** 2)) * q2
+        + (s ** 3) * q3
+    )
+
+
+# 画框：把写字区域边界“画”在 z=0.1 平面（蓝色，仅做标记，不驱动机械臂去走）
+SQUARE_Z = 0.1
+SQUARE_CORNERS = np.array(
+    [
+        [0.5, 0.1, SQUARE_Z],
+        [0.5, 0.6, SQUARE_Z],
+        [-0.5, 0.6, SQUARE_Z],
+        [-0.5, 0.1, SQUARE_Z],
+        [0.5, 0.1, SQUARE_Z],
+    ],
+    dtype=float,
+)
+
+# 蓝色
+LINE_RGBA[:] = np.array([0.0, 0.0, 1.0, 1.0])
+
+# 边界点密度（越大越“实线”，但渲染更慢）
+BOUNDARY_RES = 60
+BOUNDARY_POINTS = []
+for i in range(4):
+    p0 = SQUARE_CORNERS[i]
+    p1 = SQUARE_CORNERS[i + 1]
+    for k in range(BOUNDARY_RES):
+        BOUNDARY_POINTS.append(LinearInterpolate(p0, p1, k, BOUNDARY_RES))
+BOUNDARY_POINTS.append(SQUARE_CORNERS[0].copy())
+
 ############################################
 ## 调参区（主要就调这里）
 ############################################
@@ -295,18 +365,18 @@ while not glfw.window_should_close(window):
         ######################################
         ## USER CODE STARTS HERE
         ######################################
-        # 写字时的末端目标点（你后续在这里更新轨迹）
-        X_ref = np.array([0.0, 0.1, 0.1])
+        # 用蓝色在 z=0.1 平面标记写字区域边界
+        traj_points[:] = BOUNDARY_POINTS
 
-        # 任务2：切到终止姿态阶段（写完后，或到结束前 N 秒）
+        # 这里不再“驱动机械臂去画框”，先让机械臂保持当前位置
+        X_ref = data.site_xpos[0].copy()
+
+        # 任务2：切到终止姿态阶段（画完后，或到结束前 N 秒）
         if g_write_finished or (data.time >= simend - TERMINAL_SWITCH_BEFORE_END_SEC):
-            # 只在第一次切换时初始化一次
             if g_mode != 'terminal':
                 g_mode = 'terminal'
-                # 清空 PID 历史，避免影响收敛
                 PID_STATE['integral'][:] = 0.0
                 PID_STATE['last_error'][:] = 0.0
-                # 立刻写入终止目标
                 g_q_ref = TERMINAL_Q.copy()
         
         ######################################
