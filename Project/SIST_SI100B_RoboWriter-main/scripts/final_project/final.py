@@ -248,7 +248,7 @@ SQUARE_CORNERS = np.array(
 LINE_RGBA[:] = np.array([0.0, 0.0, 1.0, 1.0])
 
 # 边界点密度（越大越“实线”，但渲染更慢）
-BOUNDARY_RES = 60
+BOUNDARY_RES = 600
 BOUNDARY_POINTS = []
 for i in range(4):
     p0 = SQUARE_CORNERS[i]
@@ -256,6 +256,102 @@ for i in range(4):
     for k in range(BOUNDARY_RES):
         BOUNDARY_POINTS.append(LinearInterpolate(p0, p1, k, BOUNDARY_RES))
 BOUNDARY_POINTS.append(SQUARE_CORNERS[0].copy())
+
+# 从 final_project/output 读取笔画（image_to_strokes.py 的输出）
+import ast
+
+
+def _load_strokes_txt(path: str):
+    """读取三维嵌套表格：strokes = [ [(x,y),(x,y)], ... ]。"""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            txt = f.read().strip()
+        raw = ast.literal_eval(txt) if txt else []
+    except Exception:
+        return []
+
+    cleaned = []
+    for stroke in raw:
+        pts = []
+        for p in stroke:
+            if p is None or len(p) < 2:
+                continue
+            pts.append((float(p[0]), float(p[1])))
+        if len(pts) >= 2:
+            cleaned.append(pts[:3])  # 每笔最多 3 点
+    return cleaned
+
+
+STROKES_TXT_PATH = os.path.join(dirname, 'output', 'final_strokes.txt')
+STROKES_2D = _load_strokes_txt(STROKES_TXT_PATH)
+
+# 写字执行状态（逐笔、逐线段）
+WRITE_Z = 0.1
+SEG_STEPS = 35  # 每条线分成多少步（越大越慢越平滑）
+g_stroke_i = 0
+g_seg_i = 0
+g_seg_step = 0
+
+# 轨迹显示：边框只初始化一次；写字轨迹追加后永久保留
+g_traj_inited = False
+
+
+def _get_write_xref(data):
+    """按 STROKES_2D 输出当前时刻的末端参考点 (x,y,z)。
+
+    - 一笔有 2 点：只画 1 段
+    - 一笔有 3 点：画 2 段（0-1, 1-2）
+    """
+    global g_stroke_i, g_seg_i, g_seg_step, g_write_finished
+
+    if not STROKES_2D:
+        g_write_finished = True
+        return data.site_xpos[0].copy()
+
+    # 所有笔画写完
+    if g_stroke_i >= len(STROKES_2D):
+        g_write_finished = True
+        return data.site_xpos[0].copy()
+
+    stroke = STROKES_2D[g_stroke_i]
+    if len(stroke) < 2:
+        g_stroke_i += 1
+        g_seg_i = 0
+        g_seg_step = 0
+        return data.site_xpos[0].copy()
+
+    # 当前笔画一共多少段
+    seg_count = len(stroke) - 1
+    if g_seg_i >= seg_count:
+        g_stroke_i += 1
+        g_seg_i = 0
+        g_seg_step = 0
+        return _get_write_xref(data)
+
+    x0, y0 = stroke[g_seg_i]
+    x1, y1 = stroke[g_seg_i + 1]
+    p0 = np.array([x0, y0, WRITE_Z], dtype=float)
+    p1 = np.array([x1, y1, WRITE_Z], dtype=float)
+
+    xref = LinearInterpolate(p0, p1, g_seg_step, SEG_STEPS)
+    g_seg_step += 1
+
+    # 段结束：切到下一段 / 下一笔
+    if g_seg_step >= SEG_STEPS:
+        g_seg_step = 0
+        g_seg_i += 1
+        if g_seg_i >= seg_count:
+            g_stroke_i += 1
+            g_seg_i = 0
+
+    return xref
+
+
+def _append_traj_point(p_xyz):
+    """把点追加到 traj_points（用于渲染），并保证在 z=0.1 平面。"""
+    p = np.asarray(p_xyz, dtype=float).copy()
+    p[2] = WRITE_Z
+    traj_points.append(p)
 
 ############################################
 ## 调参区（主要就调这里）
@@ -365,11 +461,19 @@ while not glfw.window_should_close(window):
         ######################################
         ## USER CODE STARTS HERE
         ######################################
-        # 用蓝色在 z=0.1 平面标记写字区域边界
-        traj_points[:] = BOUNDARY_POINTS
+        # 用蓝色在 z=0.1 平面标记写字区域边界（仅标记）
+        # 注意：不要每帧覆盖 traj_points，否则字的轨迹无法“永久显示”。
+        if not g_traj_inited:
+            traj_points[:] = list(BOUNDARY_POINTS)
+            g_traj_inited = True
 
-        # 这里不再“驱动机械臂去画框”，先让机械臂保持当前位置
-        X_ref = data.site_xpos[0].copy()
+        # 写字阶段：逐笔执行（每笔用线性插值把两点连起来）
+        if g_mode == 'write' and not g_write_finished:
+            X_ref = _get_write_xref(data)
+            # 把计划轨迹点也画出来（永久保留在 z=0.1 平面）
+            _append_traj_point(X_ref)
+        else:
+            X_ref = data.site_xpos[0].copy()
 
         # 任务2：切到终止姿态阶段（画完后，或到结束前 N 秒）
         if g_write_finished or (data.time >= simend - TERMINAL_SWITCH_BEFORE_END_SEC):
