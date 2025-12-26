@@ -176,103 +176,12 @@ data.qpos[:] = init_qpos
 cur_q_pos = init_qpos.copy()
 
 traj_points = []
-MAX_TRAJ = 5e5  # Maximum number of tinit_qory points to store
+MAX_TRAJ = 5e5  # Maximum number of trajectory points to store
 LINE_RGBA = np.array([1.0, 0.0, 0.0, 1.0])
 
 ######################################
 ## USER CODE STARTS HERE
 ######################################
-
-# 关节空间 PID：让机械臂更稳地跟踪目标关节角（用于任务2终止姿态）
-
-IK_controller_base = IK_controller
-
-############################################
-## 调参区（主要就调这里）
-############################################
-# PID 增益（6 维=6个关节）。KP大更快，KD大更稳，KI一般先不用。
-PID_KP = np.ones(6) * 1.0
-PID_KI = np.zeros(6) * 0.0
-PID_KD = np.zeros(6) * 0.1*PID_KP
-
-# 积分限幅（一般不用动）
-PID_INTEGRAL_LIMIT = 0.5
-
-# 任务2：最终必须停在这个关节角（rad）
-TERMINAL_Q = np.array([0.0, -2.32, -1.38, -2.45, 1.57, 0.0], dtype=float)
-
-# 终止阶段预留时间：初始姿态改得越远，这里越要大（建议 20~60 秒）
-TERMINAL_SWITCH_BEFORE_END_SEC = 30.0
-############################################
-
-
-PID_STATE = {
-    'integral': np.zeros(6),
-    'last_error': np.zeros(6),
-}
-
-# IK 输出的目标关节角（内部使用）
-g_q_ref = None
-
-# 阶段：write=写字，terminal=回终止姿态
-g_mode = 'write'
-# 你写完字时把它置 True
-g_write_finished = False
-
-
-def _pid_vec(kp, ki, kd, state, error, dt):
-    """6 维离散 PID。"""
-    state['integral'] = state['integral'] + error * dt
-    state['integral'] = np.clip(state['integral'], -PID_INTEGRAL_LIMIT, PID_INTEGRAL_LIMIT)
-    derivative = (error - state['last_error']) / dt
-    output = (kp * error) + (ki * state['integral']) + (kd * derivative)
-    state['last_error'] = error
-    return output
-
-
-def IK_controller(model, data, X_ref, q_pos):
-    """包装 IK：把目标关节角缓存起来，供 PID 使用。"""
-    global g_q_ref, g_mode
-
-    # 终止阶段：直接用 TERMINAL_Q 作为目标
-    if g_mode == 'terminal':
-        q_ref = TERMINAL_Q.copy()
-        g_q_ref = q_ref.copy()
-        return q_ref
-
-    # 写字阶段：正常用末端 IK
-    q_ref = IK_controller_base(model, data, X_ref, q_pos)
-    g_q_ref = q_ref.copy()
-    return q_ref
-
-
-def controller(model, data):
-    """MuJoCo 控制回调：PID 跟踪目标关节角。"""
-    global g_q_ref
-    if g_q_ref is None:
-        return
-
-    dt = model.opt.timestep
-    q = data.qpos[:6].copy()
-    q_ref = g_q_ref[:6].copy()
-    err = q_ref - q
-
-    dq_cmd = _pid_vec(PID_KP, PID_KI, PID_KD, PID_STATE, err, dt)
-
-    # position actuator：ctrl 是目标关节角
-    q_cmd = q + dq_cmd
-
-    # 安全裁剪（有 ctrlrange 才生效）
-    if getattr(model, 'actuator_ctrlrange', None) is not None and model.actuator_ctrlrange.shape[0] >= 6:
-        lo = model.actuator_ctrlrange[:6, 0]
-        hi = model.actuator_ctrlrange[:6, 1]
-        q_cmd = np.clip(q_cmd, lo, hi)
-
-    data.ctrl[:] = q_cmd
-
-
-# 重新绑定控制回调
-mj.set_mjcb_control(controller)
 
 ######################################
 ## USER CODE ENDS HERE
@@ -295,19 +204,7 @@ while not glfw.window_should_close(window):
         ######################################
         ## USER CODE STARTS HERE
         ######################################
-        # 写字时的末端目标点（你后续在这里更新轨迹）
-        X_ref = np.array([0.0, 0.1, 0.1])
-
-        # 任务2：切到终止姿态阶段（写完后，或到结束前 N 秒）
-        if g_write_finished or (data.time >= simend - TERMINAL_SWITCH_BEFORE_END_SEC):
-            # 只在第一次切换时初始化一次
-            if g_mode != 'terminal':
-                g_mode = 'terminal'
-                # 清空 PID 历史，避免影响收敛
-                PID_STATE['integral'][:] = 0.0
-                PID_STATE['last_error'][:] = 0.0
-                # 立刻写入终止目标
-                g_q_ref = TERMINAL_Q.copy()
+        X_ref = np.array([0.0, 0.1, 0.1])  # Desired end-effector position, this line is just an example
         
         ######################################
         ## USER CODE ENDS HERE
