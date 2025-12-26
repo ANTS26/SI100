@@ -248,7 +248,7 @@ SQUARE_CORNERS = np.array(
 LINE_RGBA[:] = np.array([0.0, 0.0, 1.0, 1.0])
 
 # 边界点密度（越大越“实线”，但渲染更慢）
-BOUNDARY_RES = 600
+BOUNDARY_RES = 60
 BOUNDARY_POINTS = []
 for i in range(4):
     p0 = SQUARE_CORNERS[i]
@@ -256,8 +256,6 @@ for i in range(4):
     for k in range(BOUNDARY_RES):
         BOUNDARY_POINTS.append(LinearInterpolate(p0, p1, k, BOUNDARY_RES))
 BOUNDARY_POINTS.append(SQUARE_CORNERS[0].copy())
-
-g_traj_inited = False
 
 ############################################
 ## 调参区（主要就调这里）
@@ -367,12 +365,11 @@ while not glfw.window_should_close(window):
         ######################################
         ## USER CODE STARTS HERE
         ######################################
-        t_total= simend - TERMINAL_SWITCH_BEFORE_END_SEC
-        start_point = [-0.5, 0.3, 0.1]
-        end_point = [0.2, 0.3, 0.1]
-            
-        x_ref = LinearInterpolate(start_point, end_point,t_total,t_total)
+        # 用蓝色在 z=0.1 平面标记写字区域边界
+        traj_points[:] = BOUNDARY_POINTS
 
+        # 这里不再“驱动机械臂去画框”，先让机械臂保持当前位置
+        X_ref = data.site_xpos[0].copy()
 
         # 任务2：切到终止姿态阶段（画完后，或到结束前 N 秒）
         if g_write_finished:
