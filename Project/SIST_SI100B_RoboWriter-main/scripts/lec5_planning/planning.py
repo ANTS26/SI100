@@ -12,7 +12,7 @@ import os
 import scipy as sp
 
 xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes this is in the same folder as this file)
-simend = 10 #simulation time (second)
+simend = 100 #simulation time (second)
 print_camera_config = 1 #set to 1 to print camera config
                         #this is useful for initializing view of the model)
 
@@ -151,10 +151,10 @@ glfw.set_mouse_button_callback(window, mouse_button)
 glfw.set_scroll_callback(window, scroll)
 
 # Example on how to set camera configuration
-cam.azimuth =  179.8300000000001 
-cam.elevation =  87.16333333333334
-cam.distance =  2.22
-cam.lookat = np.array([ 0.29723477517870245 , 0.28277006411151073 , 0.6082647377843177 ])
+cam.azimuth =  89.8300000000001 #摄像机水平旋转角度
+cam.elevation =  -87.16333333333334 #摄像机垂直旋转角度
+cam.distance =  1.66 #摄像机距离模型的距离
+cam.lookat = np.array([ 0.29723477517870245 , 0.28277006411151073 , 0.6082647377843177 ])   #摄像机注视点坐标
 
 # Initialize the controller
 init_controller(model,data)
@@ -168,14 +168,100 @@ data.qpos[:] = init_qpos
 cur_q_pos = init_qpos.copy()
 
 traj_points = []
-MAX_TRAJ = 1000
+MAX_TRAJ = 500
 LINE_RGBA = np.array([1.0, 0.0, 0.0, 1.0])
 
-q0 = np.array([0.5, 0.1, 0.1])
-q1 = np.array([0.3, 0.2, 0.1])
-q2 = np.array([0.6, 0.4, 0.1])
-t_total = simend
+qn = [
+    np.array([-0.3975, 0.4412, 0.15]),
+    np.array([-0.3975, 0.4412, 0.1]),
+    np.array([-0.3775, 0.4637, 0.1]),
+    np.array([-0.3500, 0.4775, 0.1]),
+    np.array([-0.3250, 0.4600, 0.1]),
+    np.array([-0.3150, 0.4312, 0.1]),
+    np.array([-0.3137, 0.4000, 0.1]),
+    np.array([-0.3237, 0.3712, 0.1]),
+    np.array([-0.3362, 0.3425, 0.1]),
+    np.array([-0.3525, 0.3162, 0.1]),
+    np.array([-0.3712, 0.2912, 0.1]),
+    np.array([-0.3862, 0.2650, 0.1]),
+    np.array([-0.3563, 0.2575, 0.1]),
+    np.array([-0.3263, 0.2550, 0.1]),
+    np.array([-0.2963, 0.2525, 0.1]),
+    np.array([-0.2775, 0.2487, 0.1]),
+    np.array([-0.2775, 0.2487, 0.15]),
+    # End of stroke
+    np.array([-0.1912, 0.4437, 0.15]),
+    np.array([-0.1912, 0.4437, 0.1]),
+    np.array([-0.2137, 0.4213, 0.1]),
+    np.array([-0.2275, 0.3937, 0.1]),
+    np.array([-0.2363, 0.3650, 0.1]),
+    np.array([-0.2413, 0.3350, 0.1]),
+    np.array([-0.2413, 0.3037, 0.1]),
+    np.array([-0.2375, 0.2737, 0.1]),
+    np.array([-0.2225, 0.2475, 0.1]),
+    np.array([-0.1937, 0.2350, 0.1]),
+    np.array([-0.1638, 0.2287, 0.1]),
+    np.array([-0.1337, 0.2262, 0.1]),
+    np.array([-0.1038, 0.2337, 0.1]),
+    np.array([-0.0812, 0.2537, 0.1]),
+    np.array([-0.0650, 0.2800, 0.1]),
+    np.array([-0.0625, 0.3112, 0.1]),
+    np.array([-0.0637, 0.3412, 0.1]),
+    np.array([-0.0725, 0.3700, 0.1]),
+    np.array([-0.0850, 0.3975, 0.1]),
+    np.array([-0.1038, 0.4213, 0.1]),
+    np.array([-0.1300, 0.4375, 0.1]),
+    np.array([-0.1600, 0.4425, 0.1]),
+    np.array([-0.1900, 0.4362, 0.1]),
+    np.array([-0.2075, 0.4213, 0.1]),
+    np.array([-0.2075, 0.4213, 0.15]),
+    # End of stroke
+    np.array([-0.0112, 0.3862, 0.15]),
+    np.array([-0.0112, 0.3862, 0.1]),
+    np.array([0.0075, 0.4100, 0.1]),
+    np.array([0.0337, 0.4250, 0.1]),
+    np.array([0.0637, 0.4163, 0.1]),
+    np.array([0.0763, 0.3887, 0.1]),
+    np.array([0.0737, 0.3588, 0.1]),
+    np.array([0.0650, 0.3300, 0.1]),
+    np.array([0.0487, 0.3037, 0.1]),
+    np.array([0.0262, 0.2838, 0.1]),
+    np.array([0.0000, 0.2675, 0.1]),
+    np.array([0.0275, 0.2537, 0.1]),
+    np.array([0.0575, 0.2525, 0.1]),
+    np.array([0.0875, 0.2537, 0.1]),
+    np.array([0.1175, 0.2562, 0.1]),
+    np.array([0.1188, 0.2562, 0.1]),
+    np.array([0.1188, 0.2562, 0.15]),
+    # End of stroke
+    np.array([0.2750, 0.4300, 0.15]),
+    np.array([0.2750, 0.4300, 0.1]),
+    np.array([0.2462, 0.4200, 0.1]),
+    np.array([0.2200, 0.4050, 0.1]),
+    np.array([0.2025, 0.3800, 0.1]),
+    np.array([0.1887, 0.3525, 0.1]),
+    np.array([0.1813, 0.3225, 0.1]),
+    np.array([0.1813, 0.2912, 0.1]),
+    np.array([0.1887, 0.2612, 0.1]),
+    np.array([0.2150, 0.2450, 0.1]),
+    np.array([0.2425, 0.2600, 0.1]),
+    np.array([0.2600, 0.2850, 0.1]),
+    np.array([0.2600, 0.3150, 0.1]),
+    np.array([0.2350, 0.3325, 0.1]),
+    np.array([0.2050, 0.3375, 0.1]),
+    np.array([0.1813, 0.3187, 0.1]),
+    np.array([0.1763, 0.3025, 0.1]),
+    np.array([0.1763, 0.3025, 0.15]),
+    # End of stroke
+]
+# 预处理：按距离累积
+path_dists = [0.0]
+for i in range(len(qn) - 1):
+    d = np.linalg.norm(qn[i+1] - qn[i])
+    path_dists.append(path_dists[-1] + d)
+total_dist = path_dists[-1] if path_dists[-1] > 1e-9 else 1e-9
 
+t_total = 20.0  # 你原来的总时间
 ######################################
 ### BAISIC INTERPOLATION FUNCTIONS ###
 def LinearInterpolate(q0, q1, t, t_total):
@@ -221,11 +307,23 @@ while not glfw.window_should_close(window):
         # Get current joint configuration
         cur_q_pos = data.qpos.copy()
         
-        # Compute reference position
-        if (data.time < t_total/2):
-            X_ref = LinearInterpolate(q0, q1, data.time, t_total/2)
-        elif (data.time < t_total):
-            X_ref = LinearInterpolate(q1, q2, data.time - t_total/2, t_total/2)
+        # Compute reference position across len(qn) points, evenly split total time
+        t_sim = min(max(data.time, 0.0), t_total)
+        curr_dist = (t_sim / t_total) * total_dist
+        seg_idx = 0
+        for i in range(len(path_dists) - 1):
+            if path_dists[i] <= curr_dist <= path_dists[i+1] + 1e-9:
+                seg_idx = i
+                break
+
+        p0 = qn[seg_idx]
+        p1 = qn[seg_idx + 1]
+        seg_len = path_dists[seg_idx + 1] - path_dists[seg_idx]
+        dist_local = curr_dist - path_dists[seg_idx]
+        if seg_len < 1e-9:
+            X_ref = p1.copy()
+        else:
+            X_ref = LinearInterpolate(p0, p1, dist_local, seg_len)
 
         # Compute control input using IK
         cur_ctrl = IK_controller(model, data, X_ref, cur_q_pos)
@@ -233,7 +331,7 @@ while not glfw.window_should_close(window):
         # Apply control input
         data.ctrl[:] = cur_ctrl
         mj.mj_step(model, data)
-        data.time += 0.02
+        #data.time += 0.02
 
     if (data.time>=simend):
         break

@@ -9,7 +9,7 @@ import mujoco as mj
 from mujoco.glfw import glfw
 import numpy as np
 import os
-
+import ast  # 新增：用于解析笔画数据
 xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes this is in the same folder as this file)
 #################################
 ## USER CODE: Set simulation parameters here
@@ -30,19 +30,62 @@ lasty = 0
 def IK_controller(model, data, X_ref, q_pos):
     # Compute Jacobian
     position_Q = data.site_xpos[0]
-
+    
+    # 6D Jacobian
     jacp = np.zeros((3, 6))
-    mj.mj_jac(model, data, jacp, None, position_Q, 7)
-
-    J = jacp.copy()
+    jacr = np.zeros((3, 6))
+    mj.mj_jac(model, data, jacp, jacr, position_Q, 7)
+    
+    J = np.vstack([jacp, jacr]) # 6x6
     Jinv = np.linalg.pinv(J)
 
-    # Reference point
+    # Position error
     X = position_Q.copy()
     dX = X_ref - X
+    
+    # Orientation error
+    # 目标：保持初始姿态（假设初始姿态是垂直的）
+    # 或者简单地，我们希望角速度为0，即保持当前姿态不变，但这会漂移。
+    # 更好的方法是：定义一个固定的目标姿态 R_ref。
+    # 这里我们假设初始时刻的姿态就是理想的垂直姿态。
+    # 由于我们没有在函数外存储 R_ref，这里做一个简化：
+    # 我们希望末端 Z 轴始终垂直向下 (0, 0, -1)
+    # 但为了简单且不引入复杂数学库，我们尝试让姿态误差为 0 (即尽力维持当前姿态)
+    # 配合初始姿态是好的这一事实。
+    # 如果要更强力地纠正，需要计算旋转误差。
+    
+    # 简易版姿态维持：希望角速度为0。
+    # 这意味着 dW = 0。
+    # 但是如果已经歪了，就回不来了。
+    
+    # 改进版：使用全局变量存储初始姿态
+    global g_R_ref
+    if 'g_R_ref' not in globals() or g_R_ref is None:
+        g_R_ref = data.site_xmat[0].reshape(3, 3).copy()
+        
+    R_cur = data.site_xmat[0].reshape(3, 3)
+    R_ref = g_R_ref
+    
+    # 计算姿态误差 (近似: dW = 0.5 * sum(cross(n_cur, n_ref) ...))
+    # R = [n, o, a]
+    # error = 0.5 * (cross(n, n_d) + cross(o, o_d) + cross(a, a_d))
+    
+    n_cur, o_cur, a_cur = R_cur[:, 0], R_cur[:, 1], R_cur[:, 2]
+    n_ref, o_ref, a_ref = R_ref[:, 0], R_ref[:, 1], R_ref[:, 2]
+    
+    dW = 0.5 * (np.cross(n_cur, n_ref) + np.cross(o_cur, o_ref) + np.cross(a_cur, a_ref))
+    
+    # 限制姿态误差的大小，防止剧烈抖动
+    dW = np.clip(dW, -1.0, 1.0)
+
+    # Combine errors
+    error = np.hstack([dX, dW])
 
     # Compute control input
-    dq = Jinv @ dX
+    dq = Jinv @ error
+    
+    # 增加阻尼，防止发散
+    dq = dq * 0.5
 
     return q_pos + dq
 
@@ -187,6 +230,24 @@ LINE_RGBA = np.array([1.0, 0.0, 0.0, 1.0])
 
 IK_controller_base = IK_controller
 
+# 新增：读取笔画数据
+strokes_path = os.path.join(os.path.dirname(__file__), "output/final_strokes.txt")
+strokes_data = []
+if os.path.exists(strokes_path):
+    with open(strokes_path, 'r') as f:
+        try:
+            strokes_data = ast.literal_eval(f.read())
+        except:
+            print("Error reading strokes file")
+
+# 新增：写字状态变量
+w_state = {'s': 0, 'p': 0, 'phase': 'move', 't0': 0, 'x0': None, 'tgt': None, 'dur': 0}
+Z_LIFT = 0.15   # 抬笔高度
+Z_WRITE = 0.095 # 写字高度
+SPEED_AIR = 0.3 # 空中移动速度
+SPEED_WRITE = 0.05 # 写字速度
+WAIT_TIME = 0.2 # 停顿时间 (秒)
+
 # 插值函数（写笔画/轨迹会用到）
 def LinearInterpolate(q0, q1, t, t_total):
     """线性插值：t=0 返回 q0，t=t_total 返回 q1。"""
@@ -245,7 +306,7 @@ SQUARE_CORNERS = np.array(
 )
 
 # 蓝色
-LINE_RGBA[:] = np.array([0.0, 0.0, 1.0, 1.0])
+# LINE_RGBA[:] = np.array([0.0, 0.0, 1.0, 1.0])
 
 # 边界点密度（越大越“实线”，但渲染更慢）
 BOUNDARY_RES = 60
@@ -256,6 +317,7 @@ for i in range(4):
     for k in range(BOUNDARY_RES):
         BOUNDARY_POINTS.append(LinearInterpolate(p0, p1, k, BOUNDARY_RES))
 BOUNDARY_POINTS.append(SQUARE_CORNERS[0].copy())
+traj_points.extend(BOUNDARY_POINTS) # 把框也加进去（红色）
 
 ############################################
 ## 调参区（主要就调这里）
@@ -263,7 +325,7 @@ BOUNDARY_POINTS.append(SQUARE_CORNERS[0].copy())
 # PID 增益（6 维=6个关节）。KP大更快，KD大更稳，KI一般先不用。
 PID_KP = np.ones(6) * 1.0
 PID_KI = np.zeros(6) * 0.0
-PID_KD = np.zeros(6) * 0.1*PID_KP
+PID_KD = np.ones(6) * 0.1
 
 # 积分限幅（一般不用动）
 PID_INTEGRAL_LIMIT = 0.5
@@ -366,10 +428,65 @@ while not glfw.window_should_close(window):
         ## USER CODE STARTS HERE
         ######################################
         # 用蓝色在 z=0.1 平面标记写字区域边界
-        traj_points[:] = BOUNDARY_POINTS
+        # traj_points[:] = BOUNDARY_POINTS
 
-        # 这里不再“驱动机械臂去画框”，先让机械臂保持当前位置
-        X_ref = data.site_xpos[0].copy()
+        # ---------------------------------------------------------
+        # 修改：写字逻辑（状态机与插值分离）
+        # ---------------------------------------------------------
+        X_ref = data.site_xpos[0].copy() # 默认保持当前位置
+        InterpolateFunc = LinearInterpolate # 这里可以随时更换插值函数
+
+        if g_mode == 'write' and not g_write_finished:
+            # 1. 状态规划：如果当前段结束（x0 is None），规划下一段
+            if w_state['x0'] is None:
+                if w_state['s'] < len(strokes_data):
+                    w_state['x0'] = data.site_xpos[0].copy()
+                    w_state['t0'] = data.time
+                    stroke = strokes_data[w_state['s']]
+                    
+                    if w_state['phase'] == 'move':
+                        w_state['tgt'] = np.array([stroke[0][0], stroke[0][1], Z_LIFT])
+                        w_state['dur'] = np.linalg.norm(w_state['tgt'] - w_state['x0']) / SPEED_AIR
+                    elif w_state['phase'] == 'down':
+                        w_state['tgt'] = np.array([stroke[0][0], stroke[0][1], Z_WRITE])
+                        w_state['dur'] = 0.1
+                    elif w_state['phase'] == 'wait_write': # 下笔后停顿
+                        w_state['tgt'] = w_state['x0'].copy()
+                        w_state['dur'] = WAIT_TIME
+                    elif w_state['phase'] == 'write':
+                        p_next = stroke[w_state['p'] + 1]
+                        w_state['tgt'] = np.array([p_next[0], p_next[1], Z_WRITE])
+                        w_state['dur'] = np.linalg.norm(w_state['tgt'] - w_state['x0']) / SPEED_WRITE
+                        if w_state['dur'] < 0.01: w_state['dur'] = 0.01
+                    elif w_state['phase'] == 'lift':
+                        p_last = stroke[-1]
+                        w_state['tgt'] = np.array([p_last[0], p_last[1], Z_LIFT])
+                        w_state['dur'] = 0.1
+                    elif w_state['phase'] == 'wait_move': # 抬笔后停顿
+                        w_state['tgt'] = w_state['x0'].copy()
+                        w_state['dur'] = WAIT_TIME
+                else:
+                    g_write_finished = True
+
+            # 2. 执行运动与状态跳转
+            if w_state['x0'] is not None:
+                t_run = data.time - w_state['t0']
+                if t_run < w_state['dur']:
+                    X_ref = InterpolateFunc(w_state['x0'], w_state['tgt'], t_run, w_state['dur'])
+                else:
+                    # 完成当前段，准备跳转
+                    X_ref = w_state['tgt'].copy()
+                    w_state['x0'] = None 
+                    
+                    # 状态跳转逻辑
+                    if w_state['phase'] == 'move': w_state['phase'] = 'down'
+                    elif w_state['phase'] == 'down': w_state['phase'] = 'wait_write'
+                    elif w_state['phase'] == 'wait_write': w_state['phase'] = 'write'; w_state['p'] = 0
+                    elif w_state['phase'] == 'write':
+                        if w_state['p'] < len(strokes_data[w_state['s']]) - 2: w_state['p'] += 1
+                        else: w_state['phase'] = 'lift'
+                    elif w_state['phase'] == 'lift': w_state['phase'] = 'wait_move'
+                    elif w_state['phase'] == 'wait_move': w_state['phase'] = 'move'; w_state['s'] += 1
 
         # 任务2：切到终止姿态阶段（画完后，或到结束前 N 秒）
         if g_write_finished or (data.time >= simend - TERMINAL_SWITCH_BEFORE_END_SEC):
