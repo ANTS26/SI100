@@ -13,7 +13,7 @@ import scipy as sp
 
 xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes this is in the same folder as this file)
 simend = 100 #simulation time (second)
-print_camera_config = 1 #set to 1 to print camera config
+print_camera_config = 0 #set to 1 to print camera config
                         #this is useful for initializing view of the model)
 
 # For callback functions
