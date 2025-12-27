@@ -14,7 +14,7 @@ xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes thi
 #################################
 ## USER CODE: Set simulation parameters here
 #################################
-simend = 180 #simulation time (second)
+simend = 45 #simulation time (second)
 print_camera_config = 0 #set to 1 to print camera config
                         #this is useful for initializing view of the model)
 #################################
@@ -292,7 +292,7 @@ def CubicBezierInterpolate(q0, q1, q2, q3, t, t_total):
     )
 
 
-# 画框：把写字区域边界“画”在 z=0.1 平面（蓝色，仅做标记，不驱动机械臂去走）
+# 画框/写字平面：按要求严格设为 z=0.1
 SQUARE_Z = 0.1
 SQUARE_CORNERS = np.array(
     [
@@ -307,9 +307,11 @@ SQUARE_CORNERS = np.array(
 
 # 蓝色
 # LINE_RGBA[:] = np.array([0.0, 0.0, 1.0, 1.0])
+# 轨迹颜色：渲染代码只用一个全局 LINE_RGBA，所以这里保持红色（否则你永远看不到“红色轨迹”）
+LINE_RGBA[:] = np.array([1.0, 0.0, 0.0, 1.0])
 
 # 边界点密度（越大越“实线”，但渲染更慢）
-BOUNDARY_RES = 60
+BOUNDARY_RES = 600
 BOUNDARY_POINTS = []
 for i in range(4):
     p0 = SQUARE_CORNERS[i]
@@ -319,13 +321,17 @@ for i in range(4):
 BOUNDARY_POINTS.append(SQUARE_CORNERS[0].copy())
 traj_points.extend(BOUNDARY_POINTS) # 把框也加进去（红色）
 
+# 边框只初始化一次，避免覆盖掉写字轨迹
+g_traj_inited = False
+
 ############################################
 ## 调参区（主要就调这里）
 ############################################
 # PID 增益（6 维=6个关节）。KP大更快，KD大更稳，KI一般先不用。
-PID_KP = np.ones(6) * 1.0
+PID_KP = np.ones(6) * 1
 PID_KI = np.zeros(6) * 0.0
 PID_KD = np.ones(6) * 0.1
+PID_KD = np.zeros(6) * 0.5
 
 # 积分限幅（一般不用动）
 PID_INTEGRAL_LIMIT = 0.5
@@ -342,6 +348,12 @@ PID_STATE = {
     'integral': np.zeros(6),
     'last_error': np.zeros(6),
 }
+
+# 末端只给位置(3D)时，关节解是“多解”的：用一个默认姿态把中间关节拉住，避免翻腕/打结。
+g_q_nominal = None
+
+# 用自己的时间轴，避免 data.time 被手动修改导致分段乱跳
+g_user_time = 0.0
 
 # IK 输出的目标关节角（内部使用）
 g_q_ref = None
@@ -364,7 +376,7 @@ def _pid_vec(kp, ki, kd, state, error, dt):
 
 def IK_controller(model, data, X_ref, q_pos):
     """包装 IK：把目标关节角缓存起来，供 PID 使用。"""
-    global g_q_ref, g_mode
+    global g_q_ref, g_mode, g_q_nominal
 
     # 终止阶段：直接用 TERMINAL_Q 作为目标
     if g_mode == 'terminal':
@@ -372,8 +384,52 @@ def IK_controller(model, data, X_ref, q_pos):
         g_q_ref = q_ref.copy()
         return q_ref
 
-    # 写字阶段：正常用末端 IK
-    q_ref = IK_controller_base(model, data, X_ref, q_pos)
+    # 写字阶段：只控制末端位置时，用 DLS + nullspace 姿态偏好，稳定中间关节
+    q = np.asarray(q_pos[:6], dtype=float).copy()
+    if g_q_nominal is None:
+        # 默认用“当前关节角”作为舒适姿态（也可手动改成 init_qpos[:6] 或 TERMINAL_Q）
+        g_q_nominal = q.copy()
+
+    X_ref = np.asarray(X_ref, dtype=float)
+    X = data.site_xpos[0].copy()
+    dX = X_ref - X
+
+    # 末端每步最大位移，防止一步跳太大
+    IK_MAX_DX = 0.02  # m
+    dx_norm = float(np.linalg.norm(dX))
+    if dx_norm > IK_MAX_DX and dx_norm > 1e-9:
+        dX = dX * (IK_MAX_DX / dx_norm)
+
+    # Jacobian (position)
+    jacp = np.zeros((3, 6))
+    # 用 site 对应的 body id，避免写死 id 导致雅可比错误/不动
+    body_id = int(model.site_bodyid[0])
+    mj.mj_jac(model, data, jacp, None, X, body_id)
+    J = jacp
+
+    # 阻尼最小二乘伪逆：J^T (J J^T + λ^2 I)^{-1}
+    lam = 0.05
+    A = J @ J.T + (lam * lam) * np.eye(3)
+    J_pinv = J.T @ np.linalg.solve(A, np.eye(3))
+
+    dq_task = J_pinv @ dX
+
+    # Nullspace：拉向默认姿态，决定“中间关节怎么摆”
+    k_null = 0.5
+    dq_null = k_null * (g_q_nominal - q)
+    N = np.eye(6) - (J_pinv @ J)
+    dq = dq_task + (N @ dq_null)
+
+    # 每关节每步限幅，避免狂转
+    IK_MAX_DQ = 0.05  # rad
+    dq = np.clip(dq, -IK_MAX_DQ, IK_MAX_DQ)
+
+    # 小步长融合
+    alpha = 0.3
+    q_next = q + alpha * dq
+
+    q_ref = np.asarray(q_pos, dtype=float).copy()
+    q_ref[:6] = q_next
     g_q_ref = q_ref.copy()
     return q_ref
 
@@ -429,6 +485,7 @@ while not glfw.window_should_close(window):
         ######################################
         # 用蓝色在 z=0.1 平面标记写字区域边界
         # traj_points[:] = BOUNDARY_POINTS
+
 
         # ---------------------------------------------------------
         # 修改：写字逻辑（状态机与插值分离）
@@ -487,9 +544,77 @@ while not glfw.window_should_close(window):
                         else: w_state['phase'] = 'lift'
                     elif w_state['phase'] == 'lift': w_state['phase'] = 'wait_move'
                     elif w_state['phase'] == 'wait_move': w_state['phase'] = 'move'; w_state['s'] += 1
+        # 标记写字区域边界
+        if not g_traj_inited:
+            traj_points[:] = list(BOUNDARY_POINTS)
+            g_traj_inited = True
+        X_ref = data.site_xpos[0].copy()
 
-        # 任务2：切到终止姿态阶段（画完后，或到结束前 N 秒）
-        if g_write_finished or (data.time >= simend - TERMINAL_SWITCH_BEFORE_END_SEC):
+
+        # 独立时间轴（跟 data.time 解耦）
+        g_user_time += 0.02
+        t = float(g_user_time)
+
+        X_target = np.array([-0.5, 0.5, 0.3], dtype=float)  # 初始先去的点（抬笔高度）
+        T_INIT = 2.0  # 先去这个点并保持的时间（秒）
+
+        # 第一笔前导（函数外）：先到正上方，再竖直减速落到 z=0.1
+        PEN_UP_Z = SQUARE_Z + 0.2
+        APPROACH_T = 1.0
+        PEN_DOWN_T = 0.8
+        prelude_T = APPROACH_T + PEN_DOWN_T
+
+        # 写字开始！
+        num_writes = 1
+        available_time = (simend - TERMINAL_SWITCH_BEFORE_END_SEC) - (T_INIT + prelude_T)
+        single_time = float(max(0.1, available_time)) / float(max(1, num_writes))
+
+        def line_writes(start_point, end_point, next_start_point):
+            single_write_time = 0.6 * single_time
+            switch_time = 0.4 * single_time
+            if data.time <= single_write_time:
+                return LinearInterpolate(start_point, end_point, data.time, single_write_time)
+            else:
+                return QuadBezierInterpolate(
+                    end_point,
+                    [(end_point[0] + next_start_point[0]) / 2, (end_point[1] + next_start_point[1]) / 2, SQUARE_Z + 0.2],
+                    next_start_point,
+                    data.time - single_write_time,
+                    switch_time,
+                )
+
+        q1 = [-0.5, 0.5, SQUARE_Z]
+        q2 = [0.3, 0.4, SQUARE_Z]
+        q3 = [0.5, 0.5, SQUARE_Z]
+
+        if t < T_INIT:
+            X_ref = X_target
+        elif t < T_INIT + APPROACH_T:
+            # 水平到 q1 正上方（z 固定 PEN_UP_Z）
+            start_above = np.array([X_target[0], X_target[1], PEN_UP_Z], dtype=float)
+            q1_above = np.array([q1[0], q1[1], PEN_UP_Z], dtype=float)
+            X_ref = LinearInterpolate(start_above, q1_above, t - T_INIT, APPROACH_T)
+        elif t < T_INIT + prelude_T:
+            # 竖直减速落笔（x,y 固定）
+            u = (t - (T_INIT + APPROACH_T)) / PEN_DOWN_T
+            s = 1.0 - (1.0 - float(np.clip(u, 0.0, 1.0)))**3  # ease-out
+            z = (1.0 - s) * PEN_UP_Z + s * SQUARE_Z
+            X_ref = np.array([q1[0], q1[1], z], dtype=float)
+        else:
+            # 写字：不改 line_writes（临时 time-offset）
+            t_local = t - (T_INIT + prelude_T)
+            _t0 = float(data.time)
+            data.time = t_local
+            X_ref = line_writes(q1, q2, q3)
+            data.time = _t0
+
+            if t_local >= single_time:
+                g_write_finished = True
+
+
+            
+        # 任务2：切到终止姿态阶段
+        if g_write_finished or (t >= simend - TERMINAL_SWITCH_BEFORE_END_SEC):
             if g_mode != 'terminal':
                 g_mode = 'terminal'
                 PID_STATE['integral'][:] = 0.0
