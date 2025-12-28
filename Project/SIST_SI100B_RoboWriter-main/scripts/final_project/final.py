@@ -331,7 +331,6 @@ g_traj_inited = False
 PID_KP = np.ones(6) * 1
 PID_KI = np.zeros(6) * 0.0
 PID_KD = np.ones(6) * 0.1
-PID_KD = np.zeros(6) * 0.5
 
 # 积分限幅（一般不用动）
 PID_INTEGRAL_LIMIT = 0.5

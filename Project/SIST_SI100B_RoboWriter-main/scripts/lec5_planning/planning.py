@@ -13,7 +13,7 @@ import scipy as sp
 
 xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes this is in the same folder as this file)
 simend = 100 #simulation time (second)
-print_camera_config = 1 #set to 1 to print camera config
+print_camera_config = 0 #set to 1 to print camera config
                         #this is useful for initializing view of the model)
 
 # For callback functions
@@ -154,7 +154,7 @@ glfw.set_scroll_callback(window, scroll)
 cam.azimuth =  89.8300000000001 #摄像机水平旋转角度
 cam.elevation =  -87.16333333333334 #摄像机垂直旋转角度
 cam.distance =  1.66 #摄像机距离模型的距离
-cam.lookat = np.array([ 0.29723477517870245 , 0.28277006411151073 , 0.6082647377843177 ])   #摄像机注视点坐标
+#cam.lookat = np.array([ 0.29723477517870245 , 0.28277006411151073 , 0.6082647377843177 ])   #摄像机注视点坐标
 
 # Initialize the controller
 init_controller(model,data)
@@ -168,12 +168,27 @@ data.qpos[:] = init_qpos
 cur_q_pos = init_qpos.copy()
 
 traj_points = []
-MAX_TRAJ = 500
+MAX_TRAJ = 1000
 LINE_RGBA = np.array([1.0, 0.0, 0.0, 1.0])
 
+# qn = [
+#     np.array([0.5,0.1,0.1]),
+#     np.array([0.5,0.6,0.1]),
+#     np.array([-0.5,0.6,0.1]),
+#     np.array([-0.5,0.1,0.1])
+#     # 可继续添加更多点
+# ]
 qn = [
     np.array([-0.3975, 0.4412, 0.15]),
-    np.array([-0.3975, 0.4412, 0.1]),
+    np.array([-0.3975, 0.4412, 0.145]),
+    np.array([-0.3975, 0.4412, 0.14]),
+    np.array([-0.3975, 0.4412, 0.135]),
+    np.array([-0.3975, 0.4412, 0.13]),
+    np.array([-0.3975, 0.4412, 0.125]),
+    np.array([-0.3975, 0.4412, 0.12]),
+    np.array([-0.3975, 0.4412, 0.115]),
+    np.array([-0.3975, 0.4412, 0.11]),
+    np.array([-0.3975, 0.4412, 0.105]),
     np.array([-0.3775, 0.4637, 0.1]),
     np.array([-0.3500, 0.4775, 0.1]),
     np.array([-0.3250, 0.4600, 0.1]),
@@ -254,14 +269,16 @@ qn = [
     np.array([0.1763, 0.3025, 0.15]),
     # End of stroke
 ]
-# 预处理：按距离累积
-path_dists = [0.0]
-for i in range(len(qn) - 1):
-    d = np.linalg.norm(qn[i+1] - qn[i])
-    path_dists.append(path_dists[-1] + d)
-total_dist = path_dists[-1] if path_dists[-1] > 1e-9 else 1e-9
-
-t_total = 20.0  # 你原来的总时间
+qn_filtered = [qn[0]]
+for i in range(1, len(qn)):
+    dist = np.linalg.norm(qn[i] - qn_filtered[-1])
+    if dist > 1e-4:  # 只有距离大于 0.1mm 才保留
+        qn_filtered.append(qn[i])
+qn = qn_filtered
+#t_total = simend
+t_total = 30.0
+n_segments = len(qn) - 1
+seg_dur = float(t_total) / n_segments
 ######################################
 ### BAISIC INTERPOLATION FUNCTIONS ###
 def LinearInterpolate(q0, q1, t, t_total):
@@ -309,21 +326,11 @@ while not glfw.window_should_close(window):
         
         # Compute reference position across len(qn) points, evenly split total time
         t_sim = min(max(data.time, 0.0), t_total)
-        curr_dist = (t_sim / t_total) * total_dist
-        seg_idx = 0
-        for i in range(len(path_dists) - 1):
-            if path_dists[i] <= curr_dist <= path_dists[i+1] + 1e-9:
-                seg_idx = i
-                break
-
-        p0 = qn[seg_idx]
-        p1 = qn[seg_idx + 1]
-        seg_len = path_dists[seg_idx + 1] - path_dists[seg_idx]
-        dist_local = curr_dist - path_dists[seg_idx]
-        if seg_len < 1e-9:
-            X_ref = p1.copy()
-        else:
-            X_ref = LinearInterpolate(p0, p1, dist_local, seg_len)
+        seg_idx = int(t_sim // seg_dur)
+        if seg_idx >= n_segments:
+            seg_idx = n_segments - 1
+        t_local = t_sim - seg_idx * seg_dur
+        X_ref = LinearInterpolate(qn[seg_idx], qn[seg_idx+1], t_local, seg_dur)
 
         # Compute control input using IK
         cur_ctrl = IK_controller(model, data, X_ref, cur_q_pos)
@@ -331,8 +338,8 @@ while not glfw.window_should_close(window):
         # Apply control input
         data.ctrl[:] = cur_ctrl
         mj.mj_step(model, data)
-        #data.time += 0.02
-
+        data.time += 0.02
+######
     if (data.time>=simend):
         break
 

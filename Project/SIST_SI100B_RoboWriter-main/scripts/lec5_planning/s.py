@@ -15,10 +15,10 @@ ROBOT_Y_MAX = 0.6
 
 # 采样距离（在机械臂坐标系下的距离阈值）
 # 越小点越密，越大点越稀疏。0.05 大约对应你要求的“一笔10个点左右”
-SAMPLE_DIST = 0.03
+SAMPLE_DIST = 0.04
 
 # Z轴高度
-Z_UP = 0.15
+Z_UP = 0.12
 Z_DOWN = 0.1
 
 class RoboWriterApp:
