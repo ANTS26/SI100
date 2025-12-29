@@ -202,9 +202,10 @@ for i in range(1, len(qn)):
     if dist > 1e-4:  # 只有距离大于 0.1mm 才保留
         qn_filtered.append(qn[i])
 qn = qn_filtered
-# 插值处理：如果相邻点距离过大，插入中间点 #######用来避免前几笔画不上 
+########################################################用来避免前几笔画不上
+# 插值处理：如果相邻点距离过大，插入中间点
 qn_interp = [qn[0]]
-MAX_DIST = 0.05 # 不写字时候的插值间距
+MAX_DIST = 0.05
 for i in range(1, len(qn)):
     dist = np.linalg.norm(qn[i] - qn[i-1])
     if dist > MAX_DIST:
