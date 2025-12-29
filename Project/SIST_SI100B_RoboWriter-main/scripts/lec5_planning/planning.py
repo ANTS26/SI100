@@ -10,9 +10,10 @@ from mujoco.glfw import glfw
 import numpy as np
 import os
 import scipy as sp
+import matplotlib.pyplot as plt
 
 xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes this is in the same folder as this file)
-simend = 100 #simulation time (second)
+simend = 180 #simulation time (second)
 
 # For callback functions
 button_left = False
@@ -185,6 +186,56 @@ traj_cursor = 0
 traj_count = 0
 LINE_RGBA = np.array([1.0, 0.0, 0.0, 1.0])
 
+# Joint state logging (only when writing)
+LOG_WHEN_WRITING_ONLY = True
+WRITE_Z_THRESHOLD = 0.1
+joint_log_time = []
+joint_log_qpos = []
+joint_log_qvel = []
+
+def SaveJointStatePlots(output_dir, t_arr, qpos_arr, qvel_arr=None):
+    try:
+        import importlib
+        plt = importlib.import_module("matplotlib.pyplot")
+    except Exception as e:
+        print("matplotlib not available; saving joint logs as CSV instead.")
+        print(f"Import error: {e}")
+        csv_path = os.path.join(output_dir, "joint_states.csv")
+        header_cols = ["time"] + [f"q{i+1}" for i in range(qpos_arr.shape[1])]
+        data_mat = np.column_stack([t_arr, qpos_arr])
+        np.savetxt(csv_path, data_mat, delimiter=",", header=",".join(header_cols), comments="")
+        print(f"Saved: {csv_path}")
+        return
+
+    # Plot joint positions
+    fig, axes = plt.subplots(6, 1, figsize=(10, 12), sharex=True)
+    for j in range(min(6, qpos_arr.shape[1])):
+        axes[j].plot(t_arr, qpos_arr[:, j], linewidth=1.0)
+        axes[j].set_ylabel(f"q{j+1} (rad)")
+        axes[j].grid(True, alpha=0.3)
+    axes[-1].set_xlabel("time (s)")
+    fig.suptitle("Joint Positions During Writing")
+    fig.tight_layout()
+    out_path = os.path.join(output_dir, "joint_states_qpos.png")
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+    # Optional: plot joint velocities
+    if qvel_arr is not None and qvel_arr.size > 0:
+        fig2, axes2 = plt.subplots(6, 1, figsize=(10, 12), sharex=True)
+        for j in range(min(6, qvel_arr.shape[1])):
+            axes2[j].plot(t_arr, qvel_arr[:, j], linewidth=1.0)
+            axes2[j].set_ylabel(f"dq{j+1} (rad/s)")
+            axes2[j].grid(True, alpha=0.3)
+        axes2[-1].set_xlabel("time (s)")
+        fig2.suptitle("Joint Velocities During Writing")
+        fig2.tight_layout()
+        out_path2 = os.path.join(output_dir, "joint_states_qvel.png")
+        fig2.savefig(out_path2, dpi=200)
+        plt.close(fig2)
+        print(f"Saved: {out_path2}")
+
 # Load trajectory from file
 traj_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trajectory_output.txt")
 if os.path.exists(traj_file):
@@ -216,8 +267,15 @@ qn = qn_interp
 
 #t_total = simend
 t_total = 30.0
-n_segments = len(qn) - 1
-seg_dur = float(t_total) / n_segments
+# Use quadratic interpolation (Quadratic Bezier) per segment.
+# Each segment uses 3 consecutive points: (q0, q1, q2).
+# Therefore, the number of segments is len(qn) - 2.
+if len(qn) >= 3:
+    n_segments = len(qn) - 2
+else:
+    n_segments = max(len(qn) - 1, 1)
+
+seg_dur = float(t_total) / float(n_segments)
 ######################################
 ### BAISIC INTERPOLATION FUNCTIONS ###
 def LinearInterpolate(q0, q1, t, t_total):
@@ -249,6 +307,24 @@ def QuadBezierInterpolate(q0, q1, q2, t, t_total):
     return (one_minus * one_minus) * q0 + (2.0 * one_minus * s) * q1 + (s * s) * q2
 ############################################
 
+def IsCollinear3Pts(p0, p1, p2, *, atol=1e-9, rtol=1e-6):
+    """Return True if 3D points p0, p1, p2 are collinear (within tolerance)."""
+    p0 = np.asarray(p0, dtype=float)
+    p1 = np.asarray(p1, dtype=float)
+    p2 = np.asarray(p2, dtype=float)
+
+    v1 = p1 - p0
+    v2 = p2 - p0
+    n1 = float(np.linalg.norm(v1))
+    n2 = float(np.linalg.norm(v2))
+
+    # If points are (nearly) identical, treat as collinear to avoid numerical issues.
+    if n1 <= atol or n2 <= atol:
+        return True
+
+    cross_norm = float(np.linalg.norm(np.cross(v1, v2)))
+    return cross_norm <= max(atol, rtol * n1 * n2)
+
 while not glfw.window_should_close(window):
     time_prev = data.time
 
@@ -256,7 +332,8 @@ while not glfw.window_should_close(window):
         # Store trajectory
         mj_end_eff_pos = data.site_xpos[0]
         #print(mj_end_eff_pos)
-        if (mj_end_eff_pos[2] < 0.1):
+        is_writing = (mj_end_eff_pos[2] < WRITE_Z_THRESHOLD)
+        if is_writing:
             # Check distance before adding
             should_add = False
             if traj_count == 0:
@@ -272,17 +349,35 @@ while not glfw.window_should_close(window):
                 traj_cursor = (traj_cursor + 1) % MAX_TRAJ
                 if traj_count < MAX_TRAJ:
                     traj_count += 1
+
+        # Log joint states (during writing by default)
+        if (not LOG_WHEN_WRITING_ONLY) or is_writing:
+            joint_log_time.append(float(data.time))
+            joint_log_qpos.append(data.qpos.copy())
+            joint_log_qvel.append(data.qvel.copy())
             
         # Get current joint configuration
         cur_q_pos = data.qpos.copy()
         
-        # Compute reference position across len(qn) points, evenly split total time
+        # Compute reference position across points, evenly split total time
         t_sim = min(max(data.time, 0.0), t_total)
         seg_idx = int(t_sim // seg_dur)
         if seg_idx >= n_segments:
             seg_idx = n_segments - 1
         t_local = t_sim - seg_idx * seg_dur
-        X_ref = LinearInterpolate(qn[seg_idx], qn[seg_idx+1], t_local, seg_dur)
+        # Quadratic interpolation (Bezier) using 3 consecutive points.
+        # If 3 points are collinear, fall back to linear interpolation.
+        if len(qn) >= 3:
+            q0 = qn[seg_idx]
+            q1 = qn[seg_idx + 1]
+            q2 = qn[seg_idx + 2]
+            if IsCollinear3Pts(q0, q1, q2):
+                X_ref = LinearInterpolate(q0, q2, t_local, seg_dur)
+            else:
+                X_ref = QuadBezierInterpolate(q0, q1, q2, t_local, seg_dur)
+        else:
+            # Fallback: not enough points for quadratic interpolation.
+            X_ref = LinearInterpolate(qn[0], qn[-1], t_local, seg_dur)
 
         # Compute control input using IK
         cur_ctrl = IK_controller(model, data, X_ref, cur_q_pos)
@@ -340,3 +435,13 @@ while not glfw.window_should_close(window):
     glfw.poll_events()
 
 glfw.terminate()
+
+# Export joint state plots after simulation
+if len(joint_log_time) > 1:
+    out_dir = os.path.dirname(os.path.abspath(__file__))
+    t_arr = np.asarray(joint_log_time, dtype=float)
+    qpos_arr = np.asarray(joint_log_qpos, dtype=float)
+    qvel_arr = np.asarray(joint_log_qvel, dtype=float)
+    SaveJointStatePlots(out_dir, t_arr, qpos_arr, qvel_arr)
+else:
+    print("No joint states logged (writing condition may never be met).")
