@@ -4,7 +4,7 @@ import numpy as np
 import math
 import os
 ###############################
-Curve_Switch=True
+Curve_Switch=False  # False: 平面书写；True: 曲面书写
 ###############################
 
 # --- 配置参数 ---
@@ -26,24 +26,63 @@ Z_UP = 0.12
 Z_DOWN = 0.1
 
 # --- 曲面书写（球面内表面）参数 ---
-# (x-0)^2 + (y-0.35)^2 + (z-1.3)^2 = 4, 且 z <= 0.1
+# (x-0)^2 + (y-0.35)^2 + (z-1.3)^2 = 1.69, 且 0 <= z <= 0.1
 SPHERE_CX = 0.0
 SPHERE_CY = 0.35
 SPHERE_CZ = 1.3
-SPHERE_R = 2.0
+SPHERE_R2 = 1.69
+SPHERE_R = math.sqrt(SPHERE_R2)
+
+# 书写区域的 z 范围（世界坐标）
+WRITE_Z_MIN = 0.0
+WRITE_Z_MAX = 0.1
+
+# 将 (x, y) 限制到球面下半球在 z=WRITE_Z_MAX 截得的圆盘内，保证 0<=z<=0.1
+_CAP_DZ = SPHERE_CZ - WRITE_Z_MAX
+_CAP_R_XY = math.sqrt(max(0.0, SPHERE_R2 - _CAP_DZ * _CAP_DZ))
+
+
+def clamp_xy_to_sphere_cap(x, y):
+    """把 (x,y) 夹到球面帽(0<=z<=WRITE_Z_MAX)的可行圆盘内。
+
+    对应条件：dx^2 + dy^2 <= _CAP_R_XY^2。
+    """
+    x = float(x)
+    y = float(y)
+    dx = x - SPHERE_CX
+    dy = y - SPHERE_CY
+    r = math.hypot(dx, dy)
+    if r <= _CAP_R_XY or r <= 0.0:
+        return x, y
+    s = _CAP_R_XY / r
+    return SPHERE_CX + dx * s, SPHERE_CY + dy * s
 
 def sphere_surface_z_lower(x, y):
     """给定 (x,y)，返回球面“下支”(z = cz - sqrt(...)) 上的 z。
 
-    该下支天然对应 z <= 0.1 的书写区域（在本作业给定工作空间范围内）。
+    为满足题目 0<=z<=0.1 的限制，这里会先把 (x,y) 夹到对应球面帽的圆盘内。
     """
+    x, y = clamp_xy_to_sphere_cap(x, y)
     dx = float(x) - SPHERE_CX
     dy = float(y) - SPHERE_CY
-    radicand = SPHERE_R * SPHERE_R - dx * dx - dy * dy
+    radicand = SPHERE_R2 - dx * dx - dy * dy
     if radicand < 0.0:
         # 超出球面投影范围时，夹到边界（理论上工作空间不会触发）
         radicand = 0.0
-    return SPHERE_CZ - math.sqrt(radicand)
+    z = SPHERE_CZ - math.sqrt(radicand)
+    # 数值安全夹紧
+    if z < WRITE_Z_MIN:
+        z = WRITE_Z_MIN
+    if z > WRITE_Z_MAX:
+        z = WRITE_Z_MAX
+    return z
+
+
+def project_to_sphere_cap(x, y):
+    """返回落在题目球面帽区域上的 (x,y,z)。"""
+    x2, y2 = clamp_xy_to_sphere_cap(x, y)
+    z2 = sphere_surface_z_lower(x2, y2)
+    return float(x2), float(y2), float(z2)
 
 def make_pen_up_point(x, y):
     """抬笔点：固定绝对高度 z = Z_UP（>0.1），用于分段与抬笔移动。"""
@@ -55,7 +94,8 @@ def make_pen_down_point(x, y):
     - Curve_Switch=True : 球面内表面书写 z = sphere_surface_z_lower(x,y)
     """
     if Curve_Switch:
-        z = sphere_surface_z_lower(x, y)
+        x2, y2, z = project_to_sphere_cap(x, y)
+        return np.array([x2, y2, float(z)], dtype=float)
     else:
         z = float(Z_DOWN)
     return np.array([float(x), float(y), float(z)], dtype=float)

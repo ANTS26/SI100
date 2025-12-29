@@ -10,9 +10,10 @@ from mujoco.glfw import glfw
 import numpy as np
 import os
 import scipy as sp
+import re
 
 xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes this is in the same folder as this file)
-simend = 100 #simulation time (second)
+simend = 70 #simulation time (second)
 
 # For callback functions
 button_left = False
@@ -178,12 +179,98 @@ init_qpos = np.array([-1.6353559, -1.28588984, 2.14838487, -2.61087434, -1.59030
 data.qpos[:] = init_qpos
 cur_q_pos = init_qpos.copy()
 
+# After writing, the arm must stop at this joint configuration (rad)
+FINAL_QPOS = np.array([0.0, -2.32, -1.38, -2.45, 1.57, 0.0], dtype=float)
+RESET_DURATION = 5.0  # seconds to move to FINAL_QPOS
+RESET_TOL = 1e-2      # rad tolerance for considering reset done
+reset_started = False
+reset_done = False
+reset_start_time = 0.0
+reset_q_start = None
+
 
 MAX_TRAJ = 3000################################################################################################
 traj_points = np.zeros((MAX_TRAJ, 3))
 traj_cursor = 0
 traj_count = 0
 LINE_RGBA = np.array([1.0, 0.0, 0.0, 1.0])
+
+# Joint state logging (only when writing)
+LOG_WHEN_WRITING_ONLY = True
+WRITE_Z_THRESHOLD = 0.1
+joint_log_time = []
+joint_log_qpos = []
+joint_log_qvel = []
+
+def LoadCurveSwitchFromS(script_path: str):
+    """Read Curve_Switch=True/False from s.py without importing it (tkinter side effects)."""
+    try:
+        with open(script_path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return False
+
+    m = re.search(r"^\s*Curve_Switch\s*=\s*(True|False)\b", text, flags=re.MULTILINE)
+    if not m:
+        return False
+    return m.group(1) == "True"
+
+
+CURVE_SWITCH = LoadCurveSwitchFromS(os.path.join(os.path.dirname(os.path.abspath(__file__)), "s.py"))
+print(f"Curve_Switch from s.py: {CURVE_SWITCH}")
+
+# Rendering/writing region definition
+SPHERE_CENTER = np.array([0.0, 0.35, 1.3], dtype=float)
+SPHERE_R2 = 1.69
+SPHERE_EQ_TOL = 0.02  # equation tolerance for deciding "on the sphere"
+
+def ShouldRenderPoint(pos: np.ndarray):
+    """Two rendering modes:
+    - Planar (CURVE_SWITCH=False): render if z <= 0.1
+    - Curved (CURVE_SWITCH=True): render if 0 <= z <= 0.1 and (x-0)^2+(y-0.35)^2+(z-1.3)^2 ~= 1.69
+    """
+    z = float(pos[2])
+    z_ok = (0.0 <= z <= WRITE_Z_THRESHOLD)
+    if not CURVE_SWITCH:
+        return z_ok
+
+    dx = float(pos[0]) - float(SPHERE_CENTER[0])
+    dy = float(pos[1]) - float(SPHERE_CENTER[1])
+    dz = float(pos[2]) - float(SPHERE_CENTER[2])
+    sphere_expr = dx * dx + dy * dy + dz * dz
+    return z_ok and (sphere_expr - SPHERE_R2  >= -SPHERE_EQ_TOL)
+
+def SaveJointStatePlots(output_dir, t_arr, qpos_arr, qvel_arr=None):
+    import importlib
+    plt = importlib.import_module("matplotlib.pyplot")
+    # Plot joint positions
+    fig, axes = plt.subplots(6, 1, figsize=(10, 12), sharex=True)
+    for j in range(min(6, qpos_arr.shape[1])):
+        axes[j].plot(t_arr, qpos_arr[:, j], linewidth=1.0)
+        axes[j].set_ylabel(f"q{j+1} (rad)")
+        axes[j].grid(True, alpha=0.3)
+    axes[-1].set_xlabel("time (s)")
+    fig.suptitle("Joint Positions During Writing")
+    fig.tight_layout()
+    out_path = os.path.join(output_dir, "joint_states_qpos.png")
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+    # Optional: plot joint velocities
+    if qvel_arr is not None and qvel_arr.size > 0:
+        fig2, axes2 = plt.subplots(6, 1, figsize=(10, 12), sharex=True)
+        for j in range(min(6, qvel_arr.shape[1])):
+            axes2[j].plot(t_arr, qvel_arr[:, j], linewidth=1.0)
+            axes2[j].set_ylabel(f"dq{j+1} (rad/s)")
+            axes2[j].grid(True, alpha=0.3)
+        axes2[-1].set_xlabel("time (s)")
+        fig2.suptitle("Joint Velocities During Writing")
+        fig2.tight_layout()
+        out_path2 = os.path.join(output_dir, "joint_states_qvel.png")
+        fig2.savefig(out_path2, dpi=200)
+        plt.close(fig2)
+        print(f"Saved: {out_path2}")
 
 # Load trajectory from file
 traj_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trajectory_output.txt")
@@ -202,10 +289,9 @@ for i in range(1, len(qn)):
     if dist > 1e-4:  # 只有距离大于 0.1mm 才保留
         qn_filtered.append(qn[i])
 qn = qn_filtered
-########################################################用来避免前几笔画不上
-# 插值处理：如果相邻点距离过大，插入中间点
+# 插值处理：如果相邻点距离过大，插入中间点 #######用来避免前几笔画不上 
 qn_interp = [qn[0]]
-MAX_DIST = 0.05
+MAX_DIST = 0.05 # 不写字时候的插值间距
 for i in range(1, len(qn)):
     dist = np.linalg.norm(qn[i] - qn[i-1])
     if dist > MAX_DIST:
@@ -216,9 +302,12 @@ for i in range(1, len(qn)):
 qn = qn_interp
 
 #t_total = simend
-t_total = 30.0
-n_segments = len(qn) - 1
-seg_dur = float(t_total) / n_segments
+t_total = 60.0
+# Segment by consecutive points to keep position continuous.
+# (The previous sliding-window quadratic segments jump between endpoints and can cause bounce.)
+n_segments = max(len(qn) - 1, 1)
+
+seg_dur = float(t_total) / float(n_segments)
 ######################################
 ### BAISIC INTERPOLATION FUNCTIONS ###
 def LinearInterpolate(q0, q1, t, t_total):
@@ -250,6 +339,24 @@ def QuadBezierInterpolate(q0, q1, q2, t, t_total):
     return (one_minus * one_minus) * q0 + (2.0 * one_minus * s) * q1 + (s * s) * q2
 ############################################
 
+def IsCollinear3Pts(p0, p1, p2, *, atol=1e-9, rtol=1e-6):
+    """Return True if 3D points p0, p1, p2 are collinear (within tolerance)."""
+    p0 = np.asarray(p0, dtype=float)
+    p1 = np.asarray(p1, dtype=float)
+    p2 = np.asarray(p2, dtype=float)
+
+    v1 = p1 - p0
+    v2 = p2 - p0
+    n1 = float(np.linalg.norm(v1))
+    n2 = float(np.linalg.norm(v2))
+
+    # If points are (nearly) identical, treat as collinear to avoid numerical issues.
+    if n1 <= atol or n2 <= atol:
+        return True
+
+    cross_norm = float(np.linalg.norm(np.cross(v1, v2)))
+    return cross_norm <= max(atol, rtol * n1 * n2)
+
 while not glfw.window_should_close(window):
     time_prev = data.time
 
@@ -257,7 +364,8 @@ while not glfw.window_should_close(window):
         # Store trajectory
         mj_end_eff_pos = data.site_xpos[0]
         #print(mj_end_eff_pos)
-        if (mj_end_eff_pos[2] < 0.1):
+        is_writing = ShouldRenderPoint(mj_end_eff_pos)
+        if is_writing:
             # Check distance before adding
             should_add = False
             if traj_count == 0:
@@ -273,20 +381,50 @@ while not glfw.window_should_close(window):
                 traj_cursor = (traj_cursor + 1) % MAX_TRAJ
                 if traj_count < MAX_TRAJ:
                     traj_count += 1
+
+        # Log joint states (during writing by default)
+        if (not LOG_WHEN_WRITING_ONLY) or is_writing:
+            joint_log_time.append(float(data.time))
+            joint_log_qpos.append(data.qpos.copy())
+            joint_log_qvel.append(data.qvel.copy())
             
         # Get current joint configuration
         cur_q_pos = data.qpos.copy()
-        
-        # Compute reference position across len(qn) points, evenly split total time
-        t_sim = min(max(data.time, 0.0), t_total)
-        seg_idx = int(t_sim // seg_dur)
-        if seg_idx >= n_segments:
-            seg_idx = n_segments - 1
-        t_local = t_sim - seg_idx * seg_dur
-        X_ref = LinearInterpolate(qn[seg_idx], qn[seg_idx+1], t_local, seg_dur)
 
-        # Compute control input using IK
-        cur_ctrl = IK_controller(model, data, X_ref, cur_q_pos)
+        # Phase 1: writing
+        if data.time < t_total:
+            # Compute reference position across points, evenly split total time
+            t_sim = min(max(data.time, 0.0), t_total)
+            seg_idx = int(t_sim // seg_dur)
+            if seg_idx >= n_segments:
+                seg_idx = n_segments - 1
+            t_local = t_sim - seg_idx * seg_dur
+
+            # Interpolate between consecutive points (continuous across segments).
+            # Keep QuadBezierInterpolate but choose q1=(q0+q2)/2 so it becomes exactly linear.
+            q0 = qn[seg_idx]
+            q2 = qn[min(seg_idx + 1, len(qn) - 1)]
+            q1 = 0.5 * (q0 + q2)
+            X_ref = QuadBezierInterpolate(q0, q1, q2, t_local, seg_dur)
+
+            # Compute control input using IK
+            cur_ctrl = IK_controller(model, data, X_ref, cur_q_pos)
+
+        # Phase 2: reset to final joint configuration
+        else:
+            if not reset_started:
+                reset_started = True
+                reset_start_time = float(data.time)
+                reset_q_start = cur_q_pos.copy()
+
+            tau = float(data.time) - reset_start_time
+            s = 1.0 if RESET_DURATION <= 0 else float(np.clip(tau / RESET_DURATION, 0.0, 1.0))
+            q_ref = (1.0 - s) * reset_q_start + s * FINAL_QPOS
+            cur_ctrl = q_ref
+
+            if s >= 1.0 and (not reset_done):
+                if float(np.linalg.norm(cur_q_pos - FINAL_QPOS)) <= RESET_TOL:
+                    reset_done = True
         
         # Apply control input
         data.ctrl[:] = cur_ctrl
@@ -341,3 +479,13 @@ while not glfw.window_should_close(window):
     glfw.poll_events()
 
 glfw.terminate()
+
+# Export joint state plots after simulation
+if len(joint_log_time) > 1:
+    out_dir = os.path.dirname(os.path.abspath(__file__))
+    t_arr = np.asarray(joint_log_time, dtype=float)
+    qpos_arr = np.asarray(joint_log_qpos, dtype=float)
+    qvel_arr = np.asarray(joint_log_qvel, dtype=float)
+    SaveJointStatePlots(out_dir, t_arr, qpos_arr, qvel_arr)
+else:
+    print("No joint states logged (writing condition may never be met).")

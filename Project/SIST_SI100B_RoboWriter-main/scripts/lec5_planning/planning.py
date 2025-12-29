@@ -13,7 +13,7 @@ import scipy as sp
 import re
 
 xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes this is in the same folder as this file)
-simend = 70 #simulation time (second)
+simend = 130 #simulation time (second)
 
 # For callback functions
 button_left = False
@@ -221,14 +221,16 @@ print(f"Curve_Switch from s.py: {CURVE_SWITCH}")
 
 # Rendering/writing region definition
 SPHERE_CENTER = np.array([0.0, 0.35, 1.3], dtype=float)
-SPHERE_R2 = 4.0
+SPHERE_R2 = 1.69
+SPHERE_EQ_TOL = 0.01  # equation tolerance for deciding "on the sphere"
 
 def ShouldRenderPoint(pos: np.ndarray):
     """Two rendering modes:
     - Planar (CURVE_SWITCH=False): render if z <= 0.1
-    - Curved (CURVE_SWITCH=True): render if z <= 0.1 and (x-0)^2+(y-0.35)^2+(z-1.3)^2 > 4
+    - Curved (CURVE_SWITCH=True): render if 0 <= z <= 0.1 and (x-0)^2+(y-0.35)^2+(z-1.3)^2 ~= 1.69
     """
-    z_ok = float(pos[2]) <= WRITE_Z_THRESHOLD
+    z = float(pos[2])
+    z_ok = (0.0 <= z <= WRITE_Z_THRESHOLD)
     if not CURVE_SWITCH:
         return z_ok
 
@@ -236,22 +238,11 @@ def ShouldRenderPoint(pos: np.ndarray):
     dy = float(pos[1]) - float(SPHERE_CENTER[1])
     dz = float(pos[2]) - float(SPHERE_CENTER[2])
     sphere_expr = dx * dx + dy * dy + dz * dz
-    return z_ok and (sphere_expr > SPHERE_R2)
+    return z_ok and (sphere_expr - SPHERE_R2  >= -SPHERE_EQ_TOL)
 
 def SaveJointStatePlots(output_dir, t_arr, qpos_arr, qvel_arr=None):
-    try:
-        import importlib
-        plt = importlib.import_module("matplotlib.pyplot")
-    except Exception as e:
-        print("matplotlib not available; saving joint logs as CSV instead.")
-        print(f"Import error: {e}")
-        csv_path = os.path.join(output_dir, "joint_states.csv")
-        header_cols = ["time"] + [f"q{i+1}" for i in range(qpos_arr.shape[1])]
-        data_mat = np.column_stack([t_arr, qpos_arr])
-        np.savetxt(csv_path, data_mat, delimiter=",", header=",".join(header_cols), comments="")
-        print(f"Saved: {csv_path}")
-        return
-
+    import importlib
+    plt = importlib.import_module("matplotlib.pyplot")
     # Plot joint positions
     fig, axes = plt.subplots(6, 1, figsize=(10, 12), sharex=True)
     for j in range(min(6, qpos_arr.shape[1])):
@@ -311,14 +302,10 @@ for i in range(1, len(qn)):
 qn = qn_interp
 
 #t_total = simend
-t_total = 60.0
-# Use quadratic interpolation (Quadratic Bezier) per segment.
-# Each segment uses 3 consecutive points: (q0, q1, q2).
-# Therefore, the number of segments is len(qn) - 2.
-if len(qn) >= 3:
-    n_segments = len(qn) - 2
-else:
-    n_segments = max(len(qn) - 1, 1)
+t_total = 120.0
+# Segment by consecutive points to keep position continuous.
+# (The previous sliding-window quadratic segments jump between endpoints and can cause bounce.)
+n_segments = max(len(qn) - 1, 1)
 
 seg_dur = float(t_total) / float(n_segments)
 ######################################
@@ -350,6 +337,33 @@ def QuadBezierInterpolate(q0, q1, q2, t, t_total):
 
     one_minus = 1.0 - s
     return (one_minus * one_minus) * q0 + (2.0 * one_minus * s) * q1 + (s * s) * q2
+############################################
+
+############################################
+### LOCAL LAGRANGE (QUADRATIC) INTERPOLATION ###
+def Lagrange3Interpolate(p_prev, p0, p1, t, t_total):
+    """Quadratic Lagrange interpolation on u in [0,1] using nodes -1,0,1.
+
+    Points correspond to:
+    - u=-1: p_prev (previous point)
+    - u=0 : p0     (segment start)
+    - u=1 : p1     (segment end)
+    """
+    p_prev = np.asarray(p_prev, dtype=float)
+    p0 = np.asarray(p0, dtype=float)
+    p1 = np.asarray(p1, dtype=float)
+
+    if t_total <= 0:
+        return p1.copy()
+
+    u = float(t) / float(t_total)
+    u = float(np.clip(u, 0.0, 1.0))
+
+    # Lagrange basis for nodes x=-1,0,1
+    Lm1 = 0.5 * u * (u - 1.0)      # basis at -1
+    L0 = 1.0 - u * u               # basis at 0
+    L1 = 0.5 * u * (u + 1.0)       # basis at 1
+    return Lm1 * p_prev + L0 * p0 + L1 * p1
 ############################################
 
 def IsCollinear3Pts(p0, p1, p2, *, atol=1e-9, rtol=1e-6):
@@ -413,19 +427,11 @@ while not glfw.window_should_close(window):
                 seg_idx = n_segments - 1
             t_local = t_sim - seg_idx * seg_dur
 
-            # Quadratic interpolation (Bezier) using 3 consecutive points.
-            # If 3 points are collinear, fall back to linear interpolation.
-            if len(qn) >= 3:
-                q0 = qn[seg_idx]
-                q1 = qn[seg_idx + 1]
-                q2 = qn[seg_idx + 2]
-                if IsCollinear3Pts(q0, q1, q2):
-                    X_ref = LinearInterpolate(q0, q2, t_local, seg_dur)
-                else:
-                    X_ref = QuadBezierInterpolate(q0, q1, q2, t_local, seg_dur)
-            else:
-                # Fallback: not enough points for quadratic interpolation.
-                X_ref = LinearInterpolate(qn[0], qn[-1], t_local, seg_dur)
+            # Local quadratic Lagrange interpolation (uses previous point to reduce jerk).
+            q0 = qn[seg_idx]
+            q1 = qn[min(seg_idx + 1, len(qn) - 1)]
+            q_prev = qn[max(seg_idx - 1, 0)]
+            X_ref = Lagrange3Interpolate(q_prev, q0, q1, t_local, seg_dur)
 
             # Compute control input using IK
             cur_ctrl = IK_controller(model, data, X_ref, cur_q_pos)
