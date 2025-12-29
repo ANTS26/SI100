@@ -13,8 +13,6 @@ import scipy as sp
 
 xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes this is in the same folder as this file)
 simend = 100 #simulation time (second)
-print_camera_config = 0 #set to 1 to print camera config
-                        #this is useful for initializing view of the model)
 
 # For callback functions
 button_left = False
@@ -167,7 +165,7 @@ glfw.set_scroll_callback(window, scroll)
 cam.azimuth =  89.8300000000001 #摄像机水平旋转角度
 cam.elevation =  -87.16333333333334 #摄像机垂直旋转角度
 cam.distance =  1.66 #摄像机距离模型的距离
-#cam.lookat = np.array([ 0.29723477517870245 , 0.28277006411151073 , 0.6082647377843177 ])   #摄像机注视点坐标
+
 
 # Initialize the controller
 init_controller(model,data)
@@ -181,7 +179,7 @@ data.qpos[:] = init_qpos
 cur_q_pos = init_qpos.copy()
 
 
-MAX_TRAJ = 3000
+MAX_TRAJ = 3000################################################################################################
 traj_points = np.zeros((MAX_TRAJ, 3))
 traj_cursor = 0
 traj_count = 0
@@ -258,12 +256,23 @@ while not glfw.window_should_close(window):
     while (data.time - time_prev < 1.0/60.0):
         # Store trajectory
         mj_end_eff_pos = data.site_xpos[0]
-        print(mj_end_eff_pos)
+        #print(mj_end_eff_pos)
         if (mj_end_eff_pos[2] < 0.1):
-            traj_points[traj_cursor] = mj_end_eff_pos
-            traj_cursor = (traj_cursor + 1) % MAX_TRAJ
-            if traj_count < MAX_TRAJ:
-                traj_count += 1
+            # Check distance before adding
+            should_add = False
+            if traj_count == 0:
+                should_add = True
+            else:
+                last_idx = (traj_cursor - 1 + MAX_TRAJ) % MAX_TRAJ
+                last_pos = traj_points[last_idx]
+                if np.linalg.norm(mj_end_eff_pos - last_pos) >= 0.003:
+                    should_add = True
+
+            if should_add:
+                traj_points[traj_cursor] = mj_end_eff_pos
+                traj_cursor = (traj_cursor + 1) % MAX_TRAJ
+                if traj_count < MAX_TRAJ:
+                    traj_count += 1
             
         # Get current joint configuration
         cur_q_pos = data.qpos.copy()
@@ -282,7 +291,7 @@ while not glfw.window_should_close(window):
         # Apply control input
         data.ctrl[:] = cur_ctrl
         mj.mj_step(model, data)
-        data.time += 0.01
+        #data.time += 0.01
 ######
     if (data.time>=simend):
         break
@@ -297,32 +306,32 @@ while not glfw.window_should_close(window):
                        mj.mjtCatBit.mjCAT_ALL.value, scene)
     # Add trajectory as spheres
     start_idx = (traj_cursor - traj_count + MAX_TRAJ) % MAX_TRAJ
-    for j in range(1, traj_count, 3):
+    sphere_count = 0
+    
+    for j in range(0, traj_count):
+        idx = (start_idx + j) % MAX_TRAJ
+        pos = traj_points[idx]
+        
         if scene.ngeom >= scene.maxgeom:
             break  # avoid overflow
 
         geom = scene.geoms[scene.ngeom]
         scene.ngeom += 1
+        sphere_count += 1
         #print(scene.ngeom)
         
-        idx1 = (start_idx + j - 1) % MAX_TRAJ
-        idx2 = (start_idx + j) % MAX_TRAJ
-        
-        p1 = traj_points[idx1]
-        p2 = traj_points[idx2]
-        direction = p2 - p1
-        midpoint = (p1 + p2) / 2.0
-        
-        # Configure this geom as a line
-        geom.type = mj.mjtGeom.mjGEOM_SPHERE  # Use sphere for endpoints
+        # Configure this geom as a sphere
+        geom.type = mj.mjtGeom.mjGEOM_SPHERE
         geom.rgba[:] = LINE_RGBA
         geom.size[:] = np.array([0.002, 0.002, 0.002])
-        geom.pos[:] = midpoint
+        geom.pos[:] = pos
         geom.mat[:] = np.eye(3)  # no rotation
         geom.dataid = -1
         geom.segid = -1
         geom.objtype = 0
         geom.objid = 0
+        
+    print(f"Sphere count: {sphere_count}")
     mj.mjr_render(viewport, scene, context)
 
     # swap OpenGL buffers (blocking call due to v-sync)
