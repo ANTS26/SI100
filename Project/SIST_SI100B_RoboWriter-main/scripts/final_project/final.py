@@ -431,7 +431,12 @@ while not glfw.window_should_close(window):
         g_user_time += 0.02
         t = float(g_user_time)
 
-        X_target = np.array([-0.5, 0.5, 0.3], dtype=float)  # 初始先去的点（抬笔高度）
+        # 初始先“原地抬笔”（x,y 用当前末端），保证一定能看到动作
+        X_target = np.array([
+            float(data.site_xpos[0][0]),
+            float(data.site_xpos[0][1]),
+            0.3,
+        ], dtype=float)
         T_INIT = 2.0  # 先去这个点并保持的时间（秒）
 
         # 第一笔前导（函数外）：先到正上方，再竖直减速落到 z=0.1
