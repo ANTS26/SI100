@@ -4,7 +4,7 @@ import numpy as np
 import math
 import os
 ###############################
-Curve_Switch=False
+Curve_Switch=True
 ###############################
 
 # --- 配置参数 ---

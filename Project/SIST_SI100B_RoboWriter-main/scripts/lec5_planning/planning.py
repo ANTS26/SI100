@@ -10,9 +10,10 @@ from mujoco.glfw import glfw
 import numpy as np
 import os
 import scipy as sp
+import re
 
 xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes this is in the same folder as this file)
-simend = 180 #simulation time (second)
+simend = 70 #simulation time (second)
 
 # For callback functions
 button_left = False
@@ -201,6 +202,42 @@ joint_log_time = []
 joint_log_qpos = []
 joint_log_qvel = []
 
+def LoadCurveSwitchFromS(script_path: str):
+    """Read Curve_Switch=True/False from s.py without importing it (tkinter side effects)."""
+    try:
+        with open(script_path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return False
+
+    m = re.search(r"^\s*Curve_Switch\s*=\s*(True|False)\b", text, flags=re.MULTILINE)
+    if not m:
+        return False
+    return m.group(1) == "True"
+
+
+CURVE_SWITCH = LoadCurveSwitchFromS(os.path.join(os.path.dirname(os.path.abspath(__file__)), "s.py"))
+print(f"Curve_Switch from s.py: {CURVE_SWITCH}")
+
+# Rendering/writing region definition
+SPHERE_CENTER = np.array([0.0, 0.35, 1.3], dtype=float)
+SPHERE_R2 = 4.0
+
+def ShouldRenderPoint(pos: np.ndarray):
+    """Two rendering modes:
+    - Planar (CURVE_SWITCH=False): render if z <= 0.1
+    - Curved (CURVE_SWITCH=True): render if z <= 0.1 and (x-0)^2+(y-0.35)^2+(z-1.3)^2 > 4
+    """
+    z_ok = float(pos[2]) <= WRITE_Z_THRESHOLD
+    if not CURVE_SWITCH:
+        return z_ok
+
+    dx = float(pos[0]) - float(SPHERE_CENTER[0])
+    dy = float(pos[1]) - float(SPHERE_CENTER[1])
+    dz = float(pos[2]) - float(SPHERE_CENTER[2])
+    sphere_expr = dx * dx + dy * dy + dz * dz
+    return z_ok and (sphere_expr > SPHERE_R2)
+
 def SaveJointStatePlots(output_dir, t_arr, qpos_arr, qvel_arr=None):
     try:
         import importlib
@@ -274,7 +311,7 @@ for i in range(1, len(qn)):
 qn = qn_interp
 
 #t_total = simend
-t_total = 30.0
+t_total = 60.0
 # Use quadratic interpolation (Quadratic Bezier) per segment.
 # Each segment uses 3 consecutive points: (q0, q1, q2).
 # Therefore, the number of segments is len(qn) - 2.
@@ -340,7 +377,7 @@ while not glfw.window_should_close(window):
         # Store trajectory
         mj_end_eff_pos = data.site_xpos[0]
         #print(mj_end_eff_pos)
-        is_writing = (mj_end_eff_pos[2] < WRITE_Z_THRESHOLD)
+        is_writing = ShouldRenderPoint(mj_end_eff_pos)
         if is_writing:
             # Check distance before adding
             should_add = False
