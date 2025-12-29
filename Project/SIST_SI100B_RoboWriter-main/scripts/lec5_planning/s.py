@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import messagebox
 import numpy as np
 import math
+import os
 
 # --- 配置参数 ---
 CANVAS_WIDTH = 800
@@ -118,6 +119,8 @@ class RoboWriterApp:
             return
 
         output_lines = ["qn = ["]
+        # Fixed starting point as requested
+        output_lines.append("    np.array([0.49805356, 0.10012646, 0.19241237]),")
         
         for stroke in self.strokes:
             # 处理每一笔
@@ -145,7 +148,7 @@ class RoboWriterApp:
 
         output_lines.append("]")
         
-        filename = "trajectory_output.txt"
+        filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trajectory_output.txt")
         with open(filename, "w") as f:
             f.write("\n".join(output_lines))
             
