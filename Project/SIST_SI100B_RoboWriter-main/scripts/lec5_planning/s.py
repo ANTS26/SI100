@@ -3,6 +3,9 @@ from tkinter import messagebox
 import numpy as np
 import math
 import os
+###############################
+Curve_Switch=False
+###############################
 
 # --- 配置参数 ---
 CANVAS_WIDTH = 800
@@ -21,6 +24,41 @@ SAMPLE_DIST = 0.01
 # Z轴高度
 Z_UP = 0.12
 Z_DOWN = 0.1
+
+# --- 曲面书写（球面内表面）参数 ---
+# (x-0)^2 + (y-0.35)^2 + (z-1.3)^2 = 4, 且 z <= 0.1
+SPHERE_CX = 0.0
+SPHERE_CY = 0.35
+SPHERE_CZ = 1.3
+SPHERE_R = 2.0
+
+def sphere_surface_z_lower(x, y):
+    """给定 (x,y)，返回球面“下支”(z = cz - sqrt(...)) 上的 z。
+
+    该下支天然对应 z <= 0.1 的书写区域（在本作业给定工作空间范围内）。
+    """
+    dx = float(x) - SPHERE_CX
+    dy = float(y) - SPHERE_CY
+    radicand = SPHERE_R * SPHERE_R - dx * dx - dy * dy
+    if radicand < 0.0:
+        # 超出球面投影范围时，夹到边界（理论上工作空间不会触发）
+        radicand = 0.0
+    return SPHERE_CZ - math.sqrt(radicand)
+
+def make_pen_up_point(x, y):
+    """抬笔点：固定绝对高度 z = Z_UP（>0.1），用于分段与抬笔移动。"""
+    return np.array([float(x), float(y), float(Z_UP)], dtype=float)
+
+def make_pen_down_point(x, y):
+    """落笔点：两种模式
+    - Curve_Switch=False: 平面书写 z = Z_DOWN
+    - Curve_Switch=True : 球面内表面书写 z = sphere_surface_z_lower(x,y)
+    """
+    if Curve_Switch:
+        z = sphere_surface_z_lower(x, y)
+    else:
+        z = float(Z_DOWN)
+    return np.array([float(x), float(y), float(z)], dtype=float)
 
 class RoboWriterApp:
     def __init__(self, root):
@@ -134,15 +172,18 @@ class RoboWriterApp:
             
             # 起点：抬笔状态
             start_pt = stroke[0]
-            output_lines.append(f"    np.array([{start_pt[0]:.4f}, {start_pt[1]:.4f}, {Z_UP}]),")
+            p_up_start = make_pen_up_point(start_pt[0], start_pt[1])
+            output_lines.append(f"    np.array([{p_up_start[0]:.4f}, {p_up_start[1]:.4f}, {p_up_start[2]:.4f}]),")
             
             # 笔画过程：落笔状态
             for pt in stroke:
-                output_lines.append(f"    np.array([{pt[0]:.4f}, {pt[1]:.4f}, {Z_DOWN}]),")
+                p_down = make_pen_down_point(pt[0], pt[1])
+                output_lines.append(f"    np.array([{p_down[0]:.4f}, {p_down[1]:.4f}, {p_down[2]:.4f}]),")
             
             # 终点：抬笔状态
             end_pt = stroke[-1]
-            output_lines.append(f"    np.array([{end_pt[0]:.4f}, {end_pt[1]:.4f}, {Z_UP}]),")
+            p_up_end = make_pen_up_point(end_pt[0], end_pt[1])
+            output_lines.append(f"    np.array([{p_up_end[0]:.4f}, {p_up_end[1]:.4f}, {p_up_end[2]:.4f}]),")
             
             output_lines.append("    # End of stroke")
 

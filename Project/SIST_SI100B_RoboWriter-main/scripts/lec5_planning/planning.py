@@ -10,7 +10,6 @@ from mujoco.glfw import glfw
 import numpy as np
 import os
 import scipy as sp
-import matplotlib.pyplot as plt
 
 xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes this is in the same folder as this file)
 simend = 180 #simulation time (second)
@@ -178,6 +177,15 @@ mj.set_mjcb_control(controller)
 init_qpos = np.array([-1.6353559, -1.28588984, 2.14838487, -2.61087434, -1.5903009, -0.06818645])
 data.qpos[:] = init_qpos
 cur_q_pos = init_qpos.copy()
+
+# After writing, the arm must stop at this joint configuration (rad)
+FINAL_QPOS = np.array([0.0, -2.32, -1.38, -2.45, 1.57, 0.0], dtype=float)
+RESET_DURATION = 5.0  # seconds to move to FINAL_QPOS
+RESET_TOL = 1e-2      # rad tolerance for considering reset done
+reset_started = False
+reset_done = False
+reset_start_time = 0.0
+reset_q_start = None
 
 
 MAX_TRAJ = 3000################################################################################################
@@ -358,29 +366,48 @@ while not glfw.window_should_close(window):
             
         # Get current joint configuration
         cur_q_pos = data.qpos.copy()
-        
-        # Compute reference position across points, evenly split total time
-        t_sim = min(max(data.time, 0.0), t_total)
-        seg_idx = int(t_sim // seg_dur)
-        if seg_idx >= n_segments:
-            seg_idx = n_segments - 1
-        t_local = t_sim - seg_idx * seg_dur
-        # Quadratic interpolation (Bezier) using 3 consecutive points.
-        # If 3 points are collinear, fall back to linear interpolation.
-        if len(qn) >= 3:
-            q0 = qn[seg_idx]
-            q1 = qn[seg_idx + 1]
-            q2 = qn[seg_idx + 2]
-            if IsCollinear3Pts(q0, q1, q2):
-                X_ref = LinearInterpolate(q0, q2, t_local, seg_dur)
-            else:
-                X_ref = QuadBezierInterpolate(q0, q1, q2, t_local, seg_dur)
-        else:
-            # Fallback: not enough points for quadratic interpolation.
-            X_ref = LinearInterpolate(qn[0], qn[-1], t_local, seg_dur)
 
-        # Compute control input using IK
-        cur_ctrl = IK_controller(model, data, X_ref, cur_q_pos)
+        # Phase 1: writing
+        if data.time < t_total:
+            # Compute reference position across points, evenly split total time
+            t_sim = min(max(data.time, 0.0), t_total)
+            seg_idx = int(t_sim // seg_dur)
+            if seg_idx >= n_segments:
+                seg_idx = n_segments - 1
+            t_local = t_sim - seg_idx * seg_dur
+
+            # Quadratic interpolation (Bezier) using 3 consecutive points.
+            # If 3 points are collinear, fall back to linear interpolation.
+            if len(qn) >= 3:
+                q0 = qn[seg_idx]
+                q1 = qn[seg_idx + 1]
+                q2 = qn[seg_idx + 2]
+                if IsCollinear3Pts(q0, q1, q2):
+                    X_ref = LinearInterpolate(q0, q2, t_local, seg_dur)
+                else:
+                    X_ref = QuadBezierInterpolate(q0, q1, q2, t_local, seg_dur)
+            else:
+                # Fallback: not enough points for quadratic interpolation.
+                X_ref = LinearInterpolate(qn[0], qn[-1], t_local, seg_dur)
+
+            # Compute control input using IK
+            cur_ctrl = IK_controller(model, data, X_ref, cur_q_pos)
+
+        # Phase 2: reset to final joint configuration
+        else:
+            if not reset_started:
+                reset_started = True
+                reset_start_time = float(data.time)
+                reset_q_start = cur_q_pos.copy()
+
+            tau = float(data.time) - reset_start_time
+            s = 1.0 if RESET_DURATION <= 0 else float(np.clip(tau / RESET_DURATION, 0.0, 1.0))
+            q_ref = (1.0 - s) * reset_q_start + s * FINAL_QPOS
+            cur_ctrl = q_ref
+
+            if s >= 1.0 and (not reset_done):
+                if float(np.linalg.norm(cur_q_pos - FINAL_QPOS)) <= RESET_TOL:
+                    reset_done = True
         
         # Apply control input
         data.ctrl[:] = cur_ctrl
