@@ -1,5 +1,5 @@
 ###
-# Planning practice with MuJoCo
+# Plannin practice with MuJoCo
 # SI100B Robotics Programming
 # This code is modified based on the MuJoCo template code at https://github.com/pab47/pab47.github.io/tree/master.
 # Date: Dec., 2025
