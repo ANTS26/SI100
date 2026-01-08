@@ -309,7 +309,7 @@ joint_log_qvel = []
 ######
 
 # 6.1 配参数（曲面/球参数/容差）
-CURVE_SWITCH = bool(s.Curve_Switch)
+CURVE_SWITCH = bool(getattr(s, "DEFAULT_CURVE_SWITCH", True))  # 默认值：会被轨迹文件里的 Curve_Switch 覆盖
 SPHERE_CENTER = np.array([0.0, 0.35, 1.3], dtype=float)
 SPHERE_R2 = 1.69
 SPHERE_EQ_TOL = 0.01 #曲面容错
@@ -375,11 +375,11 @@ def InterpolateTrajectoryPoints(points, *, max_dist: float = 0.05):
     return out
 
 def BuildTrajectoryPoints(*, min_dist: float, max_dist: float):
-    # 从 s.py 读取轨迹并完成去重 + 插值补点
-    qn_local = s.load_trajectory_output()  # 读表
+    # 从 s.py 读取轨迹与模式，并完成去重 + 插值补点
+    qn_local, curve_switch_local = s.load_trajectory_output_with_mode()  # 读表
     qn_local = DeduplicateTrajectoryPoints(qn_local, min_dist=min_dist)
     qn_local = InterpolateTrajectoryPoints(qn_local, max_dist=max_dist)
-    return qn_local
+    return qn_local, bool(curve_switch_local)
 
 def ComputeSegmentTiming(points, *, total_time: float):
     # 根据轨迹点数计算分段数 n_segments 与每段时长 seg_dur
@@ -421,17 +421,18 @@ def Lagrange3Interpolate(p_prev, p0, p1, t, t_total):
 
 #7.1初始化
 def InitTrajectoryAndWriting(*, total_time: float, min_dist: float, max_dist: float):
-    qn_local = BuildTrajectoryPoints(min_dist=min_dist, max_dist=max_dist)
+    qn_local, curve_switch_local = BuildTrajectoryPoints(min_dist=min_dist, max_dist=max_dist)
     t_total_local, n_segments_local, seg_dur_local = ComputeSegmentTiming(qn_local, total_time=total_time)
     should_render = MakeShouldRenderPoint(
-        curve_switch=CURVE_SWITCH,
+        curve_switch=curve_switch_local,
         write_z_threshold=WRITE_Z_THRESHOLD,
         sphere_center=SPHERE_CENTER,
         sphere_r2=SPHERE_R2,
         sphere_eq_tol=SPHERE_EQ_TOL,
     )
-    return qn_local, t_total_local, n_segments_local, seg_dur_local, should_render
-qn, t_total, n_segments, seg_dur, ShouldRenderPoint = InitTrajectoryAndWriting(total_time=simend,min_dist=1e-4,max_dist=0.05,)
+    return qn_local, t_total_local, n_segments_local, seg_dur_local, should_render, bool(curve_switch_local)
+
+qn, t_total, n_segments, seg_dur, ShouldRenderPoint, CURVE_SWITCH = InitTrajectoryAndWriting(total_time=simend,min_dist=1e-4,max_dist=0.05,)
 
 
 #7.2主循环

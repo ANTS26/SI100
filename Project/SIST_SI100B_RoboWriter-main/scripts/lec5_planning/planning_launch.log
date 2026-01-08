@@ -1,0 +1,5 @@
+
+=== Launch planning.py ===
+exe: c:\Users\Ants\.conda\envs\robowriter\python.exe
+cwd: d:\desktop\desk\SI100\Project\SIST_SI100B_RoboWriter-main\scripts\lec5_planning
+script: d:\desktop\desk\SI100\Project\SIST_SI100B_RoboWriter-main\scripts\lec5_planning\planning.py
