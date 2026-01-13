@@ -1,1 +1,17 @@
+# 默认忽略全部
+*
+
+# 允许提交 .gitignore 自身
+!.gitignore
+
+# 允许提交 lec5 文件夹（本仓库中对应 scripts/lec5_planning）
+!scripts/
+!scripts/lec5_planning/
+!scripts/lec5_planning/**
+
+# 其它常见本地文件（即使未来放行更多目录也不会误提交）
 .vscode/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
